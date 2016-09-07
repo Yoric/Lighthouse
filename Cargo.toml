@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["David Rajchenbach-Teller <dteller@mozilla.com>"]
 
 [dependencies]
-lepton = "0.1"
+# lepton = "0.1"
 # ccv = "0.1"
 ccv = { path = "../ccv.rs" }
+lepton = { path = "../lepton.rs" }
