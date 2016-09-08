@@ -6,5 +6,11 @@ authors = ["David Rajchenbach-Teller <dteller@mozilla.com>"]
 [dependencies]
 # lepton = "0.1"
 # ccv = "0.1"
-ccv = { path = "../ccv.rs" }
-lepton = { path = "../lepton.rs" }
+# ccv = { path = "../ccv.rs" }
+# lepton = { path = "../lepton.rs" }
+image = "*"
+imageproc = "*"
+itertools = "0.4"
+log = "0.3"
+env_logger = "0.3"
+rand = "0.3.14"
