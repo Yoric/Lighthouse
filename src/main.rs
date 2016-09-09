@@ -7,18 +7,19 @@ extern crate rand;
 extern crate log;
 extern crate env_logger;
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry::*;
+mod clean;
+mod util;
+
 use std::env::args;
 
 use image::*;
+use image::imageops::colorops::*;
+use imageproc::contrast::*;
+use imageproc::drawing::*;
 use imageproc::map::*;
 use imageproc::edges::canny;
 use imageproc::regionlabelling::*;
-
-use itertools::*;
-
-use rand::*;
+use imageproc::rect::*;
 
 fn main() {
     env_logger::init().unwrap();
@@ -29,214 +30,42 @@ fn main() {
     let dest   = args.next().expect("Expected destination file name.");
 
     println!("Loading image.");
-    let image = image::open(source)
+    let mut image = image::open(source)
         .expect("Could not load image.")
-        .to_rgb();
+        .to_luma();
 
-    let low = 0.2;
-    let high = 0.3;
-    let chan_edges : Vec<_> = [red_channel(&image), green_channel(&image), blue_channel(&image)].iter().map(|chan| {
-        println!("Computing channel edge.");
-        canny(chan, low, high)
-    }).collect();
+    let cleaned = clean::clean_text(&mut image, &clean::CleanupParams {
+        min_width: 10,
+        min_height: 15,
+        max_width: 100,
+        max_height: 100,
+        canny_low: 0.2,
+        canny_high: 0.3,
+        split_channels: false,
+    });
 
-    println!("Combining channel edges.");
-    let edges : Vec<_> = Zip::new((chan_edges[0].iter(), chan_edges[1].iter(), chan_edges[2].iter())).map(|(r, g, b)| {
-        r | g | b
-    }).collect();
-
-    println!("Converting to image.");
-    let edges : GrayImage = ImageBuffer::from_raw(image.width(), image.height(), edges)
-        .expect("Could not create edges image");
-
-    println!("Computing components.");
-    let components = connected_components(&edges, Connectivity::Eight);
-
+    cleaned.save(dest)
+        .expect("Could not save output file");
 /*
-    let colored : Vec<_> = components.pixels().map(|pix| {
-        let full = pix.data[0];
-        let foo : [u8; 4] = unsafe { std::mem::transmute(full) };
-        Rgb::from_channels(foo[3], foo[2], foo[1], foo[0])
-    }).collect();
-    let colored : RgbImage = ImageBuffer::from_vec(image.width(), image.height(), colored)
-        .expect("Could not create colored image");
-*/
 
-    println!("Let's output an intermediate version to see what the components look like.");
-    let mut random = XorShiftRng::new_unseeded();
-    let mut colors = HashMap::new();
-    let mut buffer = Vec::new();
-    let _ = colors.insert(0, [0, 0, 0]);
-    for pixel in components.pixels() {
-        match colors.entry(pixel.data[0]) {
-            Occupied(color) => {
-                let bytes: &[u8; 3] = color.get();
-                buffer.extend_from_slice(bytes)
-            },
-            Vacant(slot) => {
-                let mut bytes = [0, 0, 0];
-                random.fill_bytes(&mut bytes);
-                slot.insert(bytes);
-                buffer.extend_from_slice(&bytes)
-            }
-        }
+
+
+
+    println!("Let's output a new intermediate version to see what the components look like.");
+
+    colored.save(format!("{}-components-cleanup.png", dest))
+        .expect("Could not write image.");
+
+    let mut rectangles = image.clone();
+    for bound in bounds_per_color.values() {
+        let rect = Rect::at(bound.x0 as i32, bound.y0 as i32).of_size(bound.x1 - bound.x0, bound.y1 - bound.y0);
+        draw_hollow_rect_mut(&mut rectangles, rect, Rgb::from_channels(255, 255, 0, 0));
     }
-    let colored : RgbImage = ImageBuffer::from_vec(image.width(), image.height(), buffer)
-        .expect("Could not create colored image.");
-
-    colored.save(format!("{}-components.png", dest))
+    rectangles.save(format!("{}-rectangles.png", dest))
         .expect("Could not write image.");
 
 
-    println!("Let's compute edge boxes.");
-    #[derive(Debug)]
-    struct Bounds {
-        x0: u32,
-        y0: u32,
-        x1: u32,
-        y1: u32,
-        color: u32,
-    }
-    let mut bounds_per_color = HashMap::new(); // FIXME: Could be a VecMap.
-    for (x, y, pixel) in components.enumerate_pixels() {
-        use std::collections::hash_map::Entry::*;
-        match bounds_per_color.entry(pixel.data[0]) {
-            Occupied(mut slot) => {
-                // Extend bounds.
-                let bounds : &mut Bounds = slot.get_mut();
-                if x < bounds.x0 {
-                    bounds.x0 = x;
-                } else if x > bounds.x1 {
-                    bounds.x1 = x;
-                }
-                if y < bounds.y0 {
-                    bounds.y0 = y;
-                } else if y > bounds.y1 {
-                    bounds.y1 = y;
-                }
-            },
-            Vacant(slot) => {
-                slot.insert(Bounds {
-                    x0: x,
-                    y0: y,
-                    x1: x,
-                    y1: y,
-                    color: pixel.data[0],
-                });
-            }
-        }
-    }
-    println!("Cleanup: We have {} boundaries", bounds_per_color.len());
-
-    // Remove Bounds that are too small/too large/too elongated.
-    const MIN_WIDTH : u32 = 15;
-    const MIN_HEIGHT : u32 = 15;
-    let mut remove = vec![];
-    {
-        for (key, bound) in &bounds_per_color {
-            println!("Cleanup: Examining {:?}", bound);
-            let width = bound.x1 - bound.x0;
-            let height = bound.y1 - bound.y0;
-            if width < MIN_WIDTH || width > image.width() / 5 {
-                println!("Cleanup: width too small/too large");
-                remove.push(key.clone());
-                continue
-            }
-            if height < MIN_HEIGHT || height > image.height() / 5 {
-                println!("Cleanup: height too small/too large");
-                remove.push(key.clone());
-                continue
-            }
-            let ratio = (width as f32) / (height as f32);
-            if ratio < 0.1 || ratio > 10. {
-                println!("Cleanup: boundary too thin");
-                remove.push(key.clone());
-                continue
-            }
-        }
-    }
-    println!("Cleanup: removing {} boundaries", remove.len());
-    for key in remove.drain(..) {
-        println!("Cleanup: removing color {}", key);
-        bounds_per_color.remove(&key).unwrap();
-    }
-
-    // Determine if a Bound is strictly inside another one.
-    let mut sort : Vec<_> = bounds_per_color.values().collect();
-    sort.sort_by(|a, b| {
-        use std::cmp::Ordering::*;
-        if a.x0 != b.x0 {
-            return a.x0.cmp(&b.x0)
-        }
-        if a.y0 != b.y0 {
-            return a.y0.cmp(&b.y0)
-        }
-        if a.x1 != b.x1 {
-            return b.x1.cmp(&a.x1)
-        }
-        if a.y1 != b.y1 {
-            return b.y1.cmp(&a.y1)
-        }
-        return Equal
-    });
-    let mut children : HashMap<u32/*color*/, u32> = HashMap::new();
-    for (bound0, i) in sort.iter().zip(0..) {
-        println!("Examining bound {}: {:?}", i, bound0);
-        if i + 1 >= sort.len() {
-            println!("Bound: last one, it can't be a parent");
-            continue;
-        }
-        for bound1 in sort[i+1..].iter() {
-            println!("Bound: Comparing with {:?}", bound1);
-            // Invariant: bound0.x0 <= bound1.x0
-            if bound1.x0 >= bound0.x1 {
-                // The rectangles are disjoint, and all further rectangles are disjoint.
-                println!("Bound: Rectangles are disjoint");
-                break;
-            }
-            if bound1.x1 > bound0.x1 {
-                // Possible intersection but no inclusion.
-                println!("Bound: Rectangles is too far on the right");
-                continue;
-            }
-            if bound0.y0 <= bound1.y0 && bound1.y1 <= bound0.y1 {
-                // bound0 has one more child
-                println!("Bound: Found child");
-                match children.entry(bound0.color) {
-                    Occupied(mut slot) => {
-                        *slot.get_mut() = slot.get() + 1
-                    },
-                    Vacant(slot) => {
-                        slot.insert(1);
-                    }
-                }
-            } else {
-                println!("Bound: Not a child");
-            }
-        }
-    }
-
-    println!("Let's output a new intermediate version to see what the components look like.");
-    let mut buffer = Vec::new();
-    for pixel in components.pixels() {
-        if let Some(total) = children.get(&pixel.data[0]) {
-            println!("{}: {}", pixel.data[0], total);
-            if *total >= 3 {
-                buffer.extend_from_slice(&[0, 0, 0]); // Get rid of this component.
-                continue;
-            }
-        } else if let None = bounds_per_color.get(&pixel.data[0]) {
-            buffer.extend_from_slice(&[0, 0, 0]);
-            continue;
-        }
-        let color = colors.get(&pixel.data[0])
-            .expect("Cannot find color");
-        buffer.extend_from_slice(color);
-    }
-    let colored : RgbImage = ImageBuffer::from_vec(image.width(), image.height(), buffer)
-        .expect("Could not create image with component cleanup.");
-
-    colored.save(format!("{}-components-cleanup.png", dest))
+    rebuilt.save(format!("{}-final.png", dest))
         .expect("Could not write image.");
 
 /*
@@ -283,6 +112,7 @@ fn main() {
 
     colored.save(format!("{}-filled.png", dest))
         .expect("Could not write image.");
+*/
 */
 }
 
