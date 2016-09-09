@@ -1,3 +1,4 @@
+extern crate ccv;
 extern crate image;
 extern crate imageproc;
 extern crate itertools;
@@ -7,19 +8,15 @@ extern crate rand;
 extern crate log;
 extern crate env_logger;
 
+use ccv::*;
+use ccv::swt::*;
+use image::*;
+use imageproc::contrast::*;
+
 mod clean;
 mod util;
 
 use std::env::args;
-
-use image::*;
-use image::imageops::colorops::*;
-use imageproc::contrast::*;
-use imageproc::drawing::*;
-use imageproc::map::*;
-use imageproc::edges::canny;
-use imageproc::regionlabelling::*;
-use imageproc::rect::*;
 
 fn main() {
     env_logger::init().unwrap();
@@ -29,12 +26,21 @@ fn main() {
     let source = args.next().expect("Expected source file name.");
     let dest   = args.next().expect("Expected destination file name.");
 
+    println!("Fast detection of text");
+    // Detect text using SWT (implemented by CCV).
+    let words =
+    {
+        // Detect text using SWT (implemented by CCV).
+        let mut matrix = Matrix::read(source.clone(), OpenAs::ToGray).expect("Could not read image (ccv)");
+        matrix.detect_words(Default::default())
+    };
+
     println!("Loading image.");
     let mut image = image::open(source)
         .expect("Could not load image.")
         .to_luma();
 
-    let cleaned = clean::clean_text(&mut image, &clean::CleanupParams {
+    let cleanup = clean::CleanupParams {
         min_width: 10,
         min_height: 15,
         max_width: 100,
@@ -42,78 +48,24 @@ fn main() {
         canny_low: 0.2,
         canny_high: 0.3,
         split_channels: false,
-    });
+    };
+    for (word, i) in words.iter().zip(0..) {
+        println!("Cleaning up chunk {}.", i);
+        let mut image = image.sub_image(word.x as u32, word.y as u32, word.width as u32, word.height as u32)
+            .to_image();
+        image.save(format!("{}-before-{}-{}x{}.png", dest, i, word.x, word.y))
+            .expect("Could not save output file");
 
-    cleaned.save(dest)
-        .expect("Could not save output file");
-/*
+        let otsu = otsu_level(&image);
+        threshold_mut(&mut image, otsu);
+        image.save(format!("{}-contrasted-{}-{}x{}.png", dest, i, word.x, word.y))
+            .expect("Could not save output file");
 
+        let cleaned = clean::clean_text(&mut image, &cleanup);
 
-
-
-    println!("Let's output a new intermediate version to see what the components look like.");
-
-    colored.save(format!("{}-components-cleanup.png", dest))
-        .expect("Could not write image.");
-
-    let mut rectangles = image.clone();
-    for bound in bounds_per_color.values() {
-        let rect = Rect::at(bound.x0 as i32, bound.y0 as i32).of_size(bound.x1 - bound.x0, bound.y1 - bound.y0);
-        draw_hollow_rect_mut(&mut rectangles, rect, Rgb::from_channels(255, 255, 0, 0));
+        cleaned.save(format!("{}-cleaned-{}-{}x{}.png", dest, i, word.x, word.y))
+            .expect("Could not save output file");
     }
-    rectangles.save(format!("{}-rectangles.png", dest))
-        .expect("Could not write image.");
-
-
-    rebuilt.save(format!("{}-final.png", dest))
-        .expect("Could not write image.");
-
-/*
-    let mut stack : Vec<Luma<u32>> = vec![]; // We're assuming that connected components worked, so no intersections.
-    const ZERO : Luma<u32> = Luma { data: [0] };
-    let mut latest = ZERO;
-    let mut fill = ZERO;
-    let mut pixels = Vec::new();
-//    let mut depth = HashMap::new();
-    for (x, _, pixel) in components.enumerate_pixels() {
-        if x == 0 {
-            // Beginning of line, reset.
-            stack.clear();
-            latest = ZERO;
-            fill = ZERO;
-        }
-        if pixel.data[0] == 0 {
-            // Not a component boundary, nothing to do.
-            // Keep filling.
-            latest = ZERO;
-        } else if pixel.data == latest.data {
-            // No change in color, nothing to do.
-        } else {
-            // This is a boundary change.
-            latest.data = pixel.data;
-            if stack.is_empty() || stack[stack.len() - 1].data != pixel.data {
-                // We're entering.
-                stack.push(*pixel);
-                fill = latest;
-            } else {
-                // We're leaving.
-                stack.pop();
-                if stack.is_empty() {
-                    fill = ZERO;
-                } else {
-                    fill = stack[stack.len() - 1]
-                }
-            }
-        }
-        pixels.extend_from_slice(colors.get(&fill.data[0]).unwrap())
-    }
-    let colored : RgbImage = ImageBuffer::from_vec(image.width(), image.height(), pixels)
-        .expect("Could not create filled image.");
-
-    colored.save(format!("{}-filled.png", dest))
-        .expect("Could not write image.");
-*/
-*/
 }
 
 /*
