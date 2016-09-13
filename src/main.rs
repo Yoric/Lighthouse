@@ -13,6 +13,9 @@ extern crate env_logger;
 //use image::*;
 //use imageproc::contrast::*;
 
+use image::*;
+use imageproc::map::*;
+
 // mod clean;
 mod swt;
 mod util;
@@ -33,8 +36,6 @@ fn main() {
 
     let swt = swt::swt(&image, &Default::default());
 
-    swt.save(format!("{}-swt-transform-gray.png", dest))
-        .expect("Could not save output file");
     util::colorize(&swt).save(format!("{}-swt-transform-color.png", dest))
         .expect("Could not save output file");
 
