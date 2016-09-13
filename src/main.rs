@@ -1,4 +1,4 @@
-extern crate ccv;
+// extern crate ccv;
 extern crate image;
 extern crate imageproc;
 extern crate itertools;
@@ -8,17 +8,19 @@ extern crate rand;
 extern crate log;
 extern crate env_logger;
 
-use ccv::*;
-use ccv::swt::*;
-use image::*;
-use imageproc::contrast::*;
+// use ccv::*;
+// use ccv::swt::*;
+// use image::*;
+// use imageproc::contrast::*;
 
-mod clean;
+// mod clean;
+mod swt;
 mod util;
 
-use std::env::args;
+// use std::env::args;
 
 fn main() {
+    /*
     env_logger::init().unwrap();
 
     let mut args = args();
@@ -37,35 +39,43 @@ fn main() {
 
     println!("Loading image.");
     let mut image = image::open(source)
-        .expect("Could not load image.")
-        .to_luma();
+        .expect("Could not load image.");
 
     let cleanup = clean::CleanupParams {
-        min_width: 10,
-        min_height: 15,
+        min_width: 8,
+        min_height: 10,
         max_width: 100,
         max_height: 100,
         canny_low: 0.2,
         canny_high: 0.3,
-        split_channels: false,
+        split_channels: true,
+        prefix: "".to_owned(),
+        suffix: "".to_owned(),
     };
     for (word, i) in words.iter().zip(0..) {
         println!("Cleaning up chunk {}.", i);
-        let mut image = image.sub_image(word.x as u32, word.y as u32, word.width as u32, word.height as u32)
+        let image = image.sub_image(word.x as u32, word.y as u32, word.width as u32, word.height as u32)
             .to_image();
         image.save(format!("{}-before-{}-{}x{}.png", dest, i, word.x, word.y))
             .expect("Could not save output file");
 
-        let otsu = otsu_level(&image);
-        threshold_mut(&mut image, otsu);
+/*
+        let mut gray = image.convert();
+        let otsu = otsu_level(&gray);
+        threshold_mut(&mut gray, otsu);
         image.save(format!("{}-contrasted-{}-{}x{}.png", dest, i, word.x, word.y))
             .expect("Could not save output file");
-
-        let cleaned = clean::clean_text(&mut image, &cleanup);
+*/
+        let cleaned = clean::clean_text(&mut DynamicImage::ImageRgba8(image), &clean::CleanupParams {
+            prefix: dest.clone(),
+            suffix: format!("{}-{}x{}.png", i, word.x, word.y),
+            ..cleanup.clone()
+        });
 
         cleaned.save(format!("{}-cleaned-{}-{}x{}.png", dest, i, word.x, word.y))
             .expect("Could not save output file");
     }
+    */
 }
 
 /*
