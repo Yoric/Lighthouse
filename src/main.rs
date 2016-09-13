@@ -10,17 +10,17 @@ extern crate env_logger;
 
 // use ccv::*;
 // use ccv::swt::*;
-// use image::*;
-// use imageproc::contrast::*;
+//use image::*;
+//use imageproc::contrast::*;
 
 // mod clean;
 mod swt;
 mod util;
 
-// use std::env::args;
+use std::default::Default;
+use std::env::args;
 
 fn main() {
-    /*
     env_logger::init().unwrap();
 
     let mut args = args();
@@ -28,6 +28,16 @@ fn main() {
     let source = args.next().expect("Expected source file name.");
     let dest   = args.next().expect("Expected destination file name.");
 
+    let image = image::open(source)
+        .expect("Could not load image.");
+
+    let swt = swt::swt(&image, &Default::default());
+
+    util::colorize(&swt).save(format!("{}-swt-transform.png", dest))
+        .expect("Could not save output file");
+
+
+/*
     println!("Fast detection of text");
     // Detect text using SWT (implemented by CCV).
     let words =

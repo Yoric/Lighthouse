@@ -43,7 +43,10 @@ pub struct SwtParams {
     pub letter_max_height: u32,
     pub letter_min_area: u32,
     pub letter_occlude_thresh: u32,
-    pub max_diameter: u32,
+
+    /// Maximal width of a strike, in iterations (~pixels). Used to give up when attempting to
+    /// find the opposite edge of a shape.
+    pub max_width: u32,
 
     /// The maximum aspect ratio for a letter.
     pub letter_max_aspect_ratio: f32,
@@ -64,6 +67,36 @@ pub struct SwtParams {
 
     pub breakdown: bool,
     pub breakdown_ratio: f32,
+}
+
+impl Default for SwtParams {
+    fn default() -> SwtParams {
+        SwtParams {
+            interval: 1,
+            same_word_thresh: [0.1, 0.8 ],
+            min_neighbors: 1,
+            scale_invariant: false,
+            canny_low: 0.48,
+            canny_high: 0.8,
+            letter_min_height: 8,
+            letter_max_height: 300,
+            letter_min_area: 38,
+            letter_occlude_thresh: 3,
+            max_width: 70,
+            letter_max_aspect_ratio: 8.,
+            std_ratio: 0.83,
+            thickness_ratio: 1.5,
+            height_ratio: 1.7,
+            intensity_thresh: 31,
+            distance_ratio: 2.9,
+            intersect_ratio: 1.3,
+            elongate_ratio: 1.9,
+            letter_thresh: 3,
+            breakdown: true,
+            breakdown_ratio: 1.0,
+            direction: SwtDirection::DarkToBright,
+        }
+    }
 }
 
 /// Complete an outline (as devised by calling sobel), by adding the missing pixels at the
@@ -102,7 +135,7 @@ pub fn close_outline(image: &DynamicImage, threshold: u8) -> GrayImage {
     gray
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Ray {
     x: i32,
     slope_x: i32,
@@ -113,6 +146,7 @@ struct Ray {
     err: i32,
 }
 
+#[derive(Debug)]
 struct RayDirection {
     xx: i32,
     xy: i32,
@@ -120,6 +154,7 @@ struct RayDirection {
     yy: i32
 }
 
+#[derive(Debug)]
 struct Stroke {
     x0: i32,
     y0: i32,
@@ -129,8 +164,23 @@ struct Stroke {
 }
 impl Stroke {
     fn iter(&self) -> StrokeIterator {
+        let adx = i32::abs(self.x1 - self.x0);
+        let ady = i32::abs(self.y1 - self.y0);
+        let slope_x = if self.x1 > self.x0 { 1 } else { -1 };
+        let slope_y = if self.y1 > self.y0 { 1 } else { -1 };
+
+        let ray = Ray {
+            x: self.x0,
+            y: self.y0,
+            slope_x: slope_x,
+            slope_y: slope_y,
+            adx: adx,
+            ady: ady,
+            err: adx - ady
+        };
+
         StrokeIterator {
-            ray: Some(Ray::from_stroke(&self)),
+            ray: Some(ray),
             x1: self.x1,
             y1: self.y1
         }
@@ -170,26 +220,7 @@ impl Iterator for StrokeIterator {
     }
 }
 
-impl Ray {
-    fn from_stroke(stroke: &Stroke) -> Ray {
-        let adx = i32::abs(stroke.x1 - stroke.x0);
-        let ady = i32::abs(stroke.y1 - stroke.y0);
-        let slope_x = if stroke.x1 > stroke.x0 { 1 } else { -1 };
-        let slope_y = if stroke.y1 > stroke.y0 { 1 } else { -1 };
-
-        Ray {
-            x: stroke.x0,
-            y: stroke.y0,
-            slope_x: slope_x,
-            slope_y: slope_y,
-            adx: adx,
-            ady: ady,
-            err: adx - ady
-        }
-    }
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Line(Ray);
 
 struct LineIterator(Ray);
@@ -216,12 +247,13 @@ impl Line {
     fn from_grad(x: u32, y: u32, x_grad: &ImageBuffer<Luma<i16>, Vec<i16>>, y_grad: &ImageBuffer<Luma<i16>, Vec<i16>>, direction: &RayDirection, params: &SwtParams) -> Line {
         let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i32;
         let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i32;
+        println!("Line::from_grad {}/{}", x_grad_pixel, y_grad_pixel);
         let rx_grad = x_grad_pixel * direction.xx + y_grad_pixel * direction.xy;
         let ry_grad = x_grad_pixel * direction.yx + y_grad_pixel * direction.yy;
 
         let adx = i32::abs(rx_grad);
         let ady = i32::abs(ry_grad);
-        return Line(Ray {
+        Line(Ray {
             x: x as i32,
             slope_x: if rx_grad <= 0 { params.direction } else { params.direction.reverse() } as i32,
             adx: adx,
@@ -231,7 +263,7 @@ impl Line {
             ady: ady,
 
             err: adx - ady
-        });
+        })
     }
     fn iter(&self) -> LineIterator {
         LineIterator(self.0.clone())
@@ -241,13 +273,17 @@ impl Line {
 impl Ray {
     fn increment(&mut self) {
         let e2 = 2 * self.err;
+//        println!("Ray::increment {} >?> {}: {}", e2, -self.ady, e2 > -self.ady);
         if e2 > -self.ady {
+//            println!("Ray::increment: moving along x");
             self.err -= self.ady;
-            self.y = self.y + self.slope_y
+            self.x += self.slope_x
         }
+//        println!("Ray::increment {} <?< {}: {}", e2, self.adx, e2 < self.adx);
         if e2 < self.adx {
+//            println!("Ray::increment: moving along y");
             self.err += self.adx;
-            self.x = self.x + self.slope_x;
+            self.y += self.slope_y;
         }
     }
 }
@@ -274,11 +310,19 @@ pub fn swt(image: &DynamicImage, params: &SwtParams) -> GrayImage {
     let x_grad = horizontal_sobel(&gray);
     let y_grad = vertical_sobel(&gray);
 
+    colorize(&x_grad)
+        .save("/tmp/output-colorized-x.png")
+        .expect("Could not save colorized-x");
+    colorize(&y_grad)
+        .save("/tmp/output-colorized-y.png")
+        .expect("Could not save colorized-y");
+
     for (x, y, pixel) in outlines.enumerate_pixels() {
         if pixel.data[0] < BW_THRESHOLD {
             // This pixel is not part of the outline, no need to throw rays.
             continue;
         }
+        println!("swt: {}x{}", x, y);
 
         // This pixel is part of the outline, so we suspect that it's the border of a shape,
         // possibly a letter.
@@ -288,13 +332,14 @@ pub fn swt(image: &DynamicImage, params: &SwtParams) -> GrayImage {
         // right, as we are scanning the image from the left.
         let mut ray_emit = |direction| {
             let line = Line::from_grad(x, y, &x_grad, &y_grad, &direction, params);
+            println!("swt line: {:?} => {:?}", direction, line);
 
-            // `Some((kx, ky)) once we have found an opposite border.
+            // `Some((kx, ky))` once we have found an opposite border.
             let mut opposite_border = None;
 
             // For performance reasons, limit how far we are willing to search for an
             // opposite border.
-            for (ray, _) in line.iter().zip(0 .. params.max_diameter) {
+            'search_opposite: for (ray, _) in line.iter().skip(1).zip(0 .. params.max_width) {
                 if ray.x < 1 || ray.x >= gray.width() - 1 {
                     // Leaving the image, no border found.
                     break;
@@ -303,25 +348,27 @@ pub fn swt(image: &DynamicImage, params: &SwtParams) -> GrayImage {
                     // Leaving the image, no border found.
                     break;
                 }
+                if i32::abs(y as i32 - ray.y as i32) < 3 && i32::abs(x as i32 - ray.x as i32) < 3 {
+                    // We are looking at another pixel that belongs to the same border, ignore it.
+                    println!("swt: ignoring {}x{}", ray.x, ray.y);
+                    continue;
+                }
                 // Note that we are not certain that we will encounter an edge. Despite calling
                 // `close_outline`, we may have lost/missed pixels that should be part of the
                 // opposite border.
-                if i32::abs(y as i32 - ray.y as i32) >= 2
-                || i32::abs(x as i32 - ray.x as i32) >= 2 {
-                    'search_neighbour: for &(dx, dy) in &[
-                        (-1, 0),
-                        (0,  0),
-                        (1,  0),
-                        (0, -1),
-                        (0,  1)
-                    ] {
-                        let kx = ray.x as i32 + dx;
-                        let ky = ray.y as i32 + dy;
-                        if outlines.get_pixel(kx as u32, ky as u32 - y).data[0] > BW_THRESHOLD {
-                            // FIXME: Why is ky >= y?
-                            opposite_border = Some((ray, kx, ky));
-                            break 'search_neighbour;
-                        }
+                for &(dx, dy) in &[
+                    (-1, 0),
+                    (0,  0),
+                    (1,  0),
+                    (0, -1),
+                    (0,  1)
+                ] {
+                    let kx = ray.x as i32 + dx;
+                    let ky = ray.y as i32 + dy;
+                    if outlines.get_pixel(kx as u32, ky as u32).data[0] > BW_THRESHOLD {
+                        opposite_border = Some((ray, kx, ky));
+                        println!("connects to {}x{}", kx, ky);
+                        break 'search_opposite;
                     }
                 }
             }
@@ -341,16 +388,18 @@ pub fn swt(image: &DynamicImage, params: &SwtParams) -> GrayImage {
                     (1,   1)
                 ] {
                     let x1 = (kx as i32 + dx) as u32;
-                    let y1 = (ky as i32 - y as i32 + dy) as u32;
-                    let tn =
-                        (y_grad.get_pixel(x, y).data[0] * x_grad.get_pixel(x1,  y1).data[0]) as i32 // FIXME: Or am I confusing x and y?
-                       - (x_grad.get_pixel(x, y).data[0] * y_grad.get_pixel(x1, y1).data[0]) as i32;
-                    let td =
-                        (x_grad.get_pixel(x, y).data[0] * x_grad.get_pixel(x1,  y1).data[0]) as i32 // FIXME: Or am I confusing x and y?
-                       - (y_grad.get_pixel(x, y).data[0] * y_grad.get_pixel(x1, y1).data[0]) as i32;
-
+                    let y1 = (ky as i32 + dy) as u32;
+//                    println!("swt: checking angle {}x{}", x1, y1);
+                    let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i64;
+                    let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i64;
+                    let x1_grad_pixel = x_grad.get_pixel(x1, y1).data[0] as i64;
+                    let y1_grad_pixel = y_grad.get_pixel(x1, y1).data[0] as i64;
+                    let tn = i64::abs(y_grad_pixel * x1_grad_pixel - x_grad_pixel * y1_grad_pixel);
+                    let td = i64::abs(x_grad_pixel * x1_grad_pixel - y_grad_pixel * y1_grad_pixel);
+                    println!("swt: checking angle {}x{} => {}x{}-{}x{}", x1, y1, x_grad_pixel, y_grad_pixel, x1_grad_pixel, y1_grad_pixel);
+                    println!("swt: tangents {}, {} => {}", tn, td, tn as f64 / td as f64);
                     // Compute a reasonable apprxomation of `|| tn/td || < pi/6`.
-                    if tn * 7 < -td * 4 && tn * 7 > td * 4 {
+                    if tn * 7 < td * 4 {
                         return true
                     }
                 }
@@ -361,6 +410,7 @@ pub fn swt(image: &DynamicImage, params: &SwtParams) -> GrayImage {
                     // We have a hit. Now, fill the line with the Stroke Width.
                     let square = |z: i32| z as f32 * z as f32;
                     let width = f32::sqrt (square(ray.x as i32 - x as i32) + square(ray.y as i32 - y as i32) + 0.5 /*extend the line to be of width 1*/) as u8;
+//                    println!("swt: filling {} pixels", width);
                     let stroke = Stroke {
                         x0: x as i32,
                         y0: y as i32,
@@ -368,16 +418,21 @@ pub fn swt(image: &DynamicImage, params: &SwtParams) -> GrayImage {
                         y1: ray.y as i32,
                         width: width
                     };
+                    println!("swt: stroke {:?}", stroke);
                     for (x1, y1) in stroke.iter() {
-                        let pixel = stroke_widths.get_pixel_mut(x1 - x, y1 - y);
+                        println!("swt: striking {}x{}", x1, y1);
+                        let pixel = stroke_widths.get_pixel_mut(x1, y1);
                         if pixel.data[0] == 0 || pixel.data[0] > width {
                             // We have found a shorter width. Update.
                             pixel.data[0] = width;
                         }
                     }
+//                    println!("swt: done filling");
 
                     // Finally, record the stroke.
                     strokes.push(stroke);
+                } else {
+                    println!("swt: wrong angle, though");
                 }
             }
         };
