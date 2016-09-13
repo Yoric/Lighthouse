@@ -33,7 +33,9 @@ fn main() {
 
     let swt = swt::swt(&image, &Default::default());
 
-    util::colorize(&swt).save(format!("{}-swt-transform.png", dest))
+    swt.save(format!("{}-swt-transform-gray.png", dest))
+        .expect("Could not save output file");
+    util::colorize(&swt).save(format!("{}-swt-transform-color.png", dest))
         .expect("Could not save output file");
 
 
