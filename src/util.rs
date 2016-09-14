@@ -1,4 +1,5 @@
 use image::*;
+use imageproc::rect::Rect;
 
 use rand::*;
 
@@ -62,4 +63,124 @@ pub fn colorize<T>(image: &ImageBuffer<Luma<T>, Vec<T>>) -> RgbImage where T: Pr
     let colored : RgbImage = ImageBuffer::from_vec(image.width(), image.height(), buffer)
         .expect("Could not create colored image.");
     colored
+}
+
+pub struct Queue<T> where T: Copy {
+    data: Vec<T>,
+    consumed: usize,
+}
+
+impl<T> Queue<T> where T: Copy {
+    pub fn new() -> Self {
+        Queue {
+            data: vec![],
+            consumed: 0,
+        }
+    }
+    pub fn push(&mut self, value: T) {
+        self.data.push(value)
+    }
+    pub fn pop(&mut self) -> Option<T> {
+        if self.consumed < self.data.len() {
+            let result = self.data[self.consumed];
+            self.consumed += 1;
+            Some(result)
+        } else {
+            None
+        }
+    }
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.consumed = 0;
+    }
+    pub fn is_empty(&self) -> bool {
+        self.data.len() == self.consumed
+    }
+    pub fn total_pushed(&self) -> usize {
+        self.data.len()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Point {
+    pub x: u32,
+    pub y: u32,
+}
+
+pub struct Contour {
+    pub points: Vec<Point>,
+    pub top_left: Point,
+    pub bottom_right: Point,
+    sum_x: u32,
+    sum_y: u32,
+    sum_x_y: u64,
+    sum_x_x: u64,
+    sum_y_y: u64,
+}
+impl Contour {
+    pub fn new(point: Point) -> Self {
+        Contour {
+           top_left: point,
+           bottom_right: point,
+           points: vec![point],
+           sum_x: 0,
+           sum_y: 0,
+           sum_x_x: 0,
+           sum_x_y: 0,
+           sum_y_y: 0,
+       }
+    }
+    pub fn push(&mut self, point: Point) {
+        if point.x < self.top_left.x {
+            self.top_left.x = point.x;
+        } else if point.x > self.bottom_right.x {
+            self.bottom_right.x = point.x;
+        }
+        if point.y < self.top_left.y {
+            self.top_left.y = point.y;
+        } else if point.y > self.bottom_right.y {
+            self.bottom_right.y = point.y;
+        }
+        self.sum_x += point.x;
+        self.sum_y += point.y;
+        self.sum_x_x += point.x as u64 * point.x as u64;
+        self.sum_x_y += point.x as u64 * point.y as u64;
+        self.sum_y_y += point.y as u64 * point.y as u64;
+        self.points.push(point);
+    }
+    pub fn height(&self) -> u32 {
+        // Note: Operation is on u32, so this will assert that the result > 0
+        self.bottom_right.x - self.top_left.x + 1
+    }
+    pub fn width(&self) -> u32 {
+        // Note: Operation is on u32, so this will assert that the result > 0
+        self.bottom_right.y - self.top_left.y + 1
+    }
+    pub fn ratio(&self) -> f32 {
+        self.height() as f32 / self.width() as f32
+    }
+    pub fn sq_ratio(&self) -> f32 {
+        let xc = self.sum_x as f32 / self.size() as f32;
+        let yc = self.sum_y as f32 / self.size() as f32;
+        let af = self.sum_x_x as f32 / self.size() as f32 - xc * xc;
+        let cf = self.sum_y_y as f32 / self.size() as f32 - yc * yc;
+        let bf = self.sum_x_y as f32 / self.size() as f32 - xc * yc;
+        let delta = f32::sqrt (bf * bf + (af - cf) * (af - cf));
+        let ratio = f32::sqrt ((af + cf + delta) / (af + cf - delta));
+        ratio
+    }
+    pub fn size(&self) -> u32 {
+        self.points.len() as u32
+    }
+    pub fn center(&self) -> Point {
+        let x = (self.top_left.x + self.bottom_right.x) / 2;
+        let y = (self.top_left.y + self.bottom_right.y) / 2;
+        Point {
+            x: x,
+            y: y
+        }
+    }
+    pub fn bound(&self) -> Rect {
+        Rect::at(self.top_left.x as i32, self.top_left.y as i32).of_size(self.width(), self.height())
+    }
 }

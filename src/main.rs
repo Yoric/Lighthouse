@@ -34,12 +34,18 @@ fn main() {
     let image = image::open(source)
         .expect("Could not load image.");
 
-    let swt = swt::swt(&image, &Default::default());
+    swt::detect_words(&image, &swt::SwtParams::default())
+/*
+    let swt = swt::swt(&image, &Default::default(), swt::SwtDirection::DarkToBright);
 
-    util::colorize(&swt).save(format!("{}-swt-transform-color.png", dest))
+    util::colorize(&swt).save(format!("{}-swt-transform-color-1.png", dest))
         .expect("Could not save output file");
 
+    let swt = swt::swt(&image, &Default::default(), swt::SwtDirection::BrightToDark);
 
+    util::colorize(&swt).save(format!("{}-swt-transform-color-2.png", dest))
+        .expect("Could not save output file");
+*/
 /*
     println!("Fast detection of text");
     // Detect text using SWT (implemented by CCV).
