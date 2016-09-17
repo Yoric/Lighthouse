@@ -1,4 +1,4 @@
-// extern crate ccv;
+extern crate ccv;
 extern crate image;
 extern crate imageproc;
 extern crate itertools;
@@ -8,10 +8,12 @@ extern crate rand;
 extern crate log;
 extern crate env_logger;
 
-// use ccv::*;
-// use ccv::swt::*;
+use ccv::{ Matrix, OpenAs, FileFormat };
+use ccv::swt::*;
+use ccv::edges::*;
 //use image::*;
-//use imageproc::contrast::*;
+use imageproc::edges::*;
+use imageproc::gradients::*;
 
 use image::*;
 use imageproc::map::*;
@@ -22,6 +24,7 @@ mod util;
 
 use std::default::Default;
 use std::env::args;
+use std::cmp::min;
 
 fn main() {
     env_logger::init().unwrap();
@@ -31,10 +34,113 @@ fn main() {
     let source = args.next().expect("Expected source file name.");
     let dest   = args.next().expect("Expected destination file name.");
 
-    let image = image::open(source)
+/*
+    let params = swt::SwtParams::default();
+
+    // Lighthouse.
+
+    let image = image::open(source.clone())
+        .expect("Could not load image.")
+        .to_luma();
+    let image = canny(&image, 0.1, 0.3);
+    image.save("/tmp/output-lighthouse-canny.png").unwrap();
+
+
+    // Compute gradients.
+    let x_grad = vertical_sobel(&image);
+    let x_grad = util::colorize(&x_grad);
+    x_grad.save("/tmp/output-lighthouse-dx.png").unwrap();
+    let y_grad = horizontal_sobel(&image);
+    let y_grad = util::colorize(&y_grad);
+    y_grad.save("/tmp/output-lighthouse-dy.png").unwrap();
+/*
+    util::colorize(&x_grad)
+        .save("/tmp/output-lighthouse-dx.png")
+        .expect("Could not save colorized-x");
+    util::colorize(&y_grad)
+        .save("/tmp/output-lighthouse-dy.png")
+        .expect("Could not save colorized-y");
+*/
+    // CCV.
+
+    let mut matrix = Matrix::read(source.clone(), OpenAs::ToGray)
+        .expect("Could not read image (ccv)");
+    matrix = matrix.canny(3, params.canny_low as f64, params.canny_high as f64);
+    matrix.write("/tmp/output-buf-canny.png", FileFormat::PNG);
+    util::colorize(&image::open("/tmp/output-buf-canny.png")
+        .expect("Could not load ccv image")
+        .to_luma()
+    )
+        .save("/tmp/output-ref-canny.png")
+        .expect("Coult not save back colorized ccv image");
+
+    matrix.sobel(3, 0)
+        .write("/tmp/output-buf-dx.png", FileFormat::PNG);
+    util::colorize(&image::open("/tmp/output-buf-dx.png")
+        .expect("Could not load ccv image")
+        .to_luma()
+    )
+        .save("/tmp/output-ref-dx.png")
+        .expect("Coult not save back colorized ccv image");
+
+    matrix.sobel(0, 3)
+        .write("/tmp/output-buf-dy.png", FileFormat::PNG);
+    util::colorize(&image::open("/tmp/output-buf-dy.png")
+        .expect("Could not load ccv image")
+        .to_luma()
+    )
+        .save("/tmp/output-ref-dy.png")
+        .expect("Coult not save back colorized ccv image");
+
+/*
+    // Our algorithm.
+    let params = swt::SwtParams::default();
+    let image = image::open(source.clone())
         .expect("Could not load image.");
 
-    swt::detect_words(&image, &swt::SwtParams::default())
+/*
+    println!("swt: detect words starting");
+    swt::detect_words(&image, &swt::SwtParams::default());
+    println!("swt: detect words complete");
+*/
+    util::colorize(&swt::swt(&image.to_luma(), &params, swt::SwtDirection::BrightToDark))
+        .save("/tmp/output-lighthouse-swt.png")
+        .unwrap();
+
+
+    let mut matrix = Matrix::read(source.clone(), OpenAs::ToGray).expect("Could not read image (ccv)");
+    matrix.swt(SwtParams::default())
+        .write("/tmp/output-ccv-swt.png", FileFormat::PNG)
+        .expect("Coult not save ccv image");
+
+    util::colorize(&image::open("/tmp/output-ccv-swt.png")
+        .expect("Could not load ccv image")
+        .to_luma()
+    )
+        .save("/tmp/output-ref-swt.png")
+        .expect("Coult not save back colorized ccv image");
+*/
+*/
+    // Our algorithm.
+    let image = image::open(source.clone())
+        .expect("Could not load image.");
+
+    swt::detect_words(&image, &swt::SwtParams::default());
+
+    // Reference algorithm.
+    let mut matrix = Matrix::read(source.clone(), OpenAs::ToGray).expect("Could not read image (ccv)");
+    matrix = matrix.swt(ccv::swt::SwtParams::default());
+    matrix.write("/tmp/output-ccv-swt.png", FileFormat::PNG)
+        .expect("Coult not save ccv image");
+
+    util::colorize(&image::open("/tmp/output-ccv-swt.png")
+        .expect("Could not load ccv image")
+        .to_luma()
+    )
+        .save("/tmp/output-ref-swt.png")
+        .expect("Coult not save back colorized ccv image");
+
+
 /*
     let swt = swt::swt(&image, &Default::default(), swt::SwtDirection::DarkToBright);
 

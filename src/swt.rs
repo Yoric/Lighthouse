@@ -1,10 +1,8 @@
 use image::*;
-use image::imageops::resize;
 
 use imageproc::definitions::*;
 use imageproc::edges::canny;
 use imageproc::gradients::*;
-use imageproc::rect::Rect;
 
 use std::cmp::{ max, min };
 
@@ -125,8 +123,8 @@ pub fn close_outline(image: &GrayImage, threshold: u8) -> GrayImage {
 
     for i in 0 .. image.width() {
         for j in 0 .. image.height() {
-            let is_white = |i, j| {
-                image.get_pixel(i, j).data[0] >= threshold
+            let is_white = |x, y| {
+                image.get_pixel(x, y).data[0] >= threshold
             };
 
             if result.get_pixel(i, j).data[0] == 0 && is_white(i, j) {
@@ -255,15 +253,15 @@ impl Iterator for LineIterator {
 
 impl Line {
     fn from_grad(x: u32, y: u32,
-            x_grad: &ImageBuffer<Luma<i16>, Vec<i16>>,
-            y_grad: &ImageBuffer<Luma<i16>, Vec<i16>>,
+            x_grad: &ImageBuffer<Luma<u8>, Vec<u8>>,
+            y_grad: &ImageBuffer<Luma<u8>, Vec<u8>>,
             vector: &RayDirection,
             direction: SwtDirection) -> Line {
         let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i32;
         let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i32;
-        println!("Line::from_grad {}/{}", x_grad_pixel, y_grad_pixel);
         let rx_grad = x_grad_pixel * vector.xx + y_grad_pixel * vector.xy;
         let ry_grad = x_grad_pixel * vector.yx + y_grad_pixel * vector.yy;
+//        println!("Line::from_grad ({}, {})", x_grad_pixel, y_grad_pixel);
 
         let adx = i32::abs(rx_grad);
         let ady = i32::abs(ry_grad);
@@ -287,20 +285,42 @@ impl Line {
 impl Ray {
     fn increment(&mut self) {
         let e2 = 2 * self.err;
-//        println!("Ray::increment {} >?> {}: {}", e2, -self.ady, e2 > -self.ady);
         if e2 > -self.ady {
-//            println!("Ray::increment: moving along x");
             self.err -= self.ady;
             self.x += self.slope_x
         }
-//        println!("Ray::increment {} <?< {}: {}", e2, self.adx, e2 < self.adx);
         if e2 < self.adx {
-//            println!("Ray::increment: moving along y");
             self.err += self.adx;
             self.y += self.slope_y;
         }
     }
 }
+
+/*
+fn horizontal_sobel2(image: &GrayImage) -> ImageBuffer<Luma<i16>, Vec<i16>> {
+    // FIXME: Handle border
+    let mut result : ImageBuffer<Luma<i16>, _> = ImageBuffer::new(image.width(), image.height());
+    for x in 1..image.width() - 1 {
+        for y in 1..image.height() - 1 {
+            result.get_pixel_mut(x, y).data[0] =
+                image.get_pixel(x - 1, y).data[0] as i16
+              + 2 * image.get_pixel(x, y).data[0] as i16
+              + image.get_pixel(x + 1, y).data[0] as i16;
+        }
+    }
+    let mut buf = Vec::with_capacity(image.height() as usize);
+    for x in 1..image.width() - 1 {
+        buf.clear();
+        for y in 1..image.height() - 1 {
+            buf.push(result.get_pixel(x + 1, y).data[0] - result.get_pixel(x - 1, y).data[0])
+        }
+        for i in 0..buf.len() {
+            result.get_pixel_mut(x, i as u32 + 1).data[0] = buf[0]
+        }
+    }
+    result
+}
+*/
 
 pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> GrayImage {
     const BW_THRESHOLD : u8 = 1; /* Any number other than 0 (black) and 255 (white) works.*/
@@ -309,17 +329,43 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
     // segment found so far that connects two edges of an outline. Once we have finished computing
     // all (reasonable) segments, this will contain an approximation of the width of each outline,
     // i.e. the stroke width.
-    let mut stroke_widths = GrayImage::new(image.width(), image.height());
+    let mut stroke_widths = GrayImage::from_pixel(image.width(), image.height(), Luma {
+        data: [0]
+    });
     let mut strokes = vec![];
 
+/*
     // Compute all outlines on the image...
     let edges = canny(image, params.canny_low, params.canny_high);
     // ... and improve the chances that they are closed.
     let outlines = close_outline(&edges, BW_THRESHOLD);
+*/
+// FIXME: What if we did it with CCV?
+    {
+        use ccv::*;
+        image.save("/tmp/output-buf-source.png").unwrap();
+        let mut matrix = Matrix::read("/tmp/output-buf-source.png", OpenAs::ToGray)
+            .expect("Could not read image (ccv)");
 
+        matrix.canny(3, params.canny_low as f64, params.canny_high as f64)
+            .close_outline()
+            .write("/tmp/output-ref-outline.png", FileFormat::PNG)
+            .unwrap();
+
+        matrix.sobel(3, 0)
+            .write("/tmp/output-ref-dx.png", FileFormat::PNG);
+        matrix.sobel(0, 3)
+            .write("/tmp/output-ref-dy.png", FileFormat::PNG);
+    }
+
+    let x_grad = open("/tmp/output-ref-dx.png").unwrap().to_luma();
+    let y_grad = open("/tmp/output-ref-dy.png").unwrap().to_luma();
+    let outlines = open("/tmp/output-ref-outline.png").unwrap().to_luma();
+/*
     // Compute gradients.
-    let x_grad = horizontal_sobel(image);
-    let y_grad = vertical_sobel(image);
+    let y_grad = horizontal_sobel(image);
+    let x_grad = vertical_sobel(image);
+*/
 
     colorize(&x_grad)
         .save("/tmp/output-colorized-x.png")
@@ -327,14 +373,11 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
     colorize(&y_grad)
         .save("/tmp/output-colorized-y.png")
         .expect("Could not save colorized-y");
+    colorize(&outlines)
+        .save("/tmp/output-outlines.png")
+        .expect("Could not save outlines");
 
-    for (x, y, pixel) in outlines.enumerate_pixels() {
-        if pixel.data[0] < BW_THRESHOLD {
-            // This pixel is not part of the outline, no need to throw rays.
-            continue;
-        }
-        println!("swt: {}x{}", x, y);
-
+    for (x, y, outline) in outlines.enumerate_pixels() {
         // This pixel is part of the outline, so we suspect that it's the border of a shape,
         // possibly a letter.
         //
@@ -343,7 +386,8 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
         // right, as we are scanning the image from the left.
         let mut ray_emit = |vector| {
             let line = Line::from_grad(x, y, &x_grad, &y_grad, &vector, direction);
-            println!("swt line: {:?} => {:?}", vector, line);
+
+            println!("swt::swt ray_emit ({}, {}) with ({}, {}) and ({}, {})", line.0.x, line.0.y, line.0.slope_x, line.0.slope_y, line.0.adx, line.0.ady);
 
             // `Some((kx, ky))` once we have found an opposite border.
             let mut opposite_border = None;
@@ -361,7 +405,6 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                 }
                 if i32::abs(y as i32 - ray.y as i32) < 3 && i32::abs(x as i32 - ray.x as i32) < 3 {
                     // We are looking at another pixel that belongs to the same border, ignore it.
-                    println!("swt: ignoring {}x{}", ray.x, ray.y);
                     continue;
                 }
                 // Note that we are not certain that we will encounter an edge. Despite calling
@@ -378,7 +421,6 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                     let ky = ray.y as i32 + dy;
                     if outlines.get_pixel(kx as u32, ky as u32).data[0] > BW_THRESHOLD {
                         opposite_border = Some((ray, kx, ky));
-                        println!("connects to {}x{}", kx, ky);
                         break 'search_opposite;
                     }
                 }
@@ -400,15 +442,12 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                 ] {
                     let x1 = (kx as i32 + dx) as u32;
                     let y1 = (ky as i32 + dy) as u32;
-//                    println!("swt: checking angle {}x{}", x1, y1);
                     let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i64;
                     let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i64;
                     let x1_grad_pixel = x_grad.get_pixel(x1, y1).data[0] as i64;
                     let y1_grad_pixel = y_grad.get_pixel(x1, y1).data[0] as i64;
                     let tn = i64::abs(y_grad_pixel * x1_grad_pixel - x_grad_pixel * y1_grad_pixel);
                     let td = i64::abs(x_grad_pixel * x1_grad_pixel - y_grad_pixel * y1_grad_pixel);
-                    println!("swt: checking angle {}x{} => {}x{}-{}x{}", x1, y1, x_grad_pixel, y_grad_pixel, x1_grad_pixel, y1_grad_pixel);
-                    println!("swt: tangents {}, {} => {}", tn, td, tn as f64 / td as f64);
                     // Compute a reasonable apprxomation of `|| tn/td || < pi/6`.
                     if tn * 7 < td * 4 {
                         return true
@@ -421,7 +460,6 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                     // We have a hit. Now, fill the line with the Stroke Width.
                     let square = |z: i32| z as f32 * z as f32;
                     let width = f32::sqrt (square(ray.x as i32 - x as i32) + square(ray.y as i32 - y as i32) + 0.5 /*extend the line to be of width 1*/) as u8;
-//                    println!("swt: filling {} pixels", width);
                     let stroke = Stroke {
                         x0: x as i32,
                         y0: y as i32,
@@ -429,24 +467,26 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                         y1: ray.y as i32,
                         width: width
                     };
-                    println!("swt: stroke {:?}", stroke);
                     for (x1, y1) in stroke.iter() {
-                        println!("swt: striking {}x{}", x1, y1);
                         let pixel = stroke_widths.get_pixel_mut(x1, y1);
-                        if pixel.data[0] == 0 || pixel.data[0] > width {
+                        if pixel.data[0] == 0 || width <= pixel.data[0] {
                             // We have found a shorter width. Update.
                             pixel.data[0] = width;
                         }
                     }
-//                    println!("swt: done filling");
+                    println!("swt::swt: stroke ({},{}) => ({},{}) {}", stroke.x0, stroke.y0, stroke.x1, stroke.y1, stroke.width);
 
                     // Finally, record the stroke.
+
                     strokes.push(stroke);
-                } else {
-                    println!("swt: wrong angle, though");
                 }
             }
         };
+        if outline.data[0] < BW_THRESHOLD {
+            // This pixel is not part of the outline, no need to throw rays.
+            continue;
+        }
+        println!("swt::swt: starting from ({}, {}) ({})", x, y, outline.data[0]);
         ray_emit(RayDirection {
             xx: 1,
             xy: 0,
@@ -478,6 +518,7 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
     strokes.sort_by(|a, b| a.width.cmp(&b.width));
     let mut buf = Vec::with_capacity(max(image.width(), image.height()) as usize);
     for stroke in strokes.drain(..) {
+        buf.clear();
         for (x, y) in stroke.iter() {
             buf.push(stroke_widths.get_pixel(x, y).data[0]);
         }
@@ -494,6 +535,7 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
     stroke_widths
 }
 
+type ComponentMap = ImageBuffer<Luma<u32>, Vec<u32>>;
 
 
 /// Group pixels by components.
@@ -504,52 +546,61 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
 ///
 /// Components that are too small are discarded as noise.
 #[allow(dead_code)]
-fn get_connected_components(swt: &Swt, params: &SwtParams) -> Vec<Contour> {
-    const WHITE: Luma<u8> = Luma { data: [255] };
-    const BLACK: Luma<u8> = Luma { data: [0] };
-
+fn get_connected_components(swt: &Swt, params: &SwtParams) -> (Vec<Contour>, ComponentMap) {
     assert!(params.smoothness_ratio > 0.);
     // Invariant: `ratio_to_average >= 1`.
     let ratio_to_average = if params.smoothness_ratio < 1. { 1. / params.smoothness_ratio } else { params.smoothness_ratio };
     let letter_min_pixels = max(params.letter_min_pixels, 2);
 
-    // BLACK for points that have not been explored yet, WHITE otherwise.
-    let mut explored : GrayImage = ImageBuffer::new(swt.0.width(), swt.0.height());
+    // 0 for points that have not been explored yet, the id otherwise.
+    let mut explored : ComponentMap = ImageBuffer::from_pixel(swt.0.width(), swt.0.height(), Luma {
+        data: [0]
+    });
     let mut contours : Vec<Contour> = vec![];
 
     // Points that have been identified as being part of the current component but have not been
     // explored yet. This vector is reused but emptied each time we start with a new `(x, y)`
     let mut pending = Queue::new();
+    let mut id_generator = 0;
 
-
-    for (x, y, pixel) in swt.0.enumerate_pixels() {
+    for (start_x, start_y, pixel) in swt.0.enumerate_pixels() {
         // Explore any component going through `(x, y)`, unless it has already been explored.
         if pixel.data[0] == 0 {
             // Not part of a component.
             continue;
         }
-        if *explored.get_pixel(x, y) != BLACK {
+        if explored.get_pixel(start_x, start_y).data[0] != 0 {
             // Component has already been labelled.
             continue;
         }
         // Start labelling component.
+        id_generator += 1;
+        let id = id_generator;
+        debug_assert!(id > 0);
         let point = Point {
-            x: x,
-            y: y
+            x: start_x,
+            y: start_y
         };
-        let mut component = Contour::new(point);
+        let mut component = Contour::new(point, id);
 
         // Start taking orders.
         pending.clear();
         pending.push(point);
-        let mut total_stroke = 0;
+
+        // The sum of the Stroke Width for all pixels encountered so far on the contour.
+        // Used to compute the average.
+//        let mut total_stroke = 0;
         while !pending.is_empty() {
             // Advance by one.
-            let closed = pending.pop().unwrap();
+            let current = pending.pop().unwrap();
 
-            // If we revisit this pixel, mark that the component has been handled already.
-            *explored.get_pixel_mut(closed.x, closed.y) = WHITE;
-            component.push(closed);
+            if explored.get_pixel(current.x, current.y).data[0] != 0 {
+                // The component has been visited already.
+                continue;
+            }
+            // Mark the pixel as visited.
+            *explored.get_pixel_mut(current.x, current.y) = Luma { data: [id] };
+            component.push(current);
 
             // Prepare neighbouring pixels.
             for &(dx, dy) in &[
@@ -562,8 +613,8 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> Vec<Contour> {
                 (0,   1),
                 (1,   1)
             ] {
-                let nx = x as i32 + dx;
-                let ny = y as i32 + dy;
+                let nx = current.x as i32 + dx;
+                let ny = current.y as i32 + dy;
                 if !(nx >= 0 && ny >= 0) {
                     // This pixel is out of the picture.
                     continue;
@@ -574,35 +625,40 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> Vec<Contour> {
                     // This pixel is out of the picture.
                     continue;
                 }
-                let pixel = *swt.0.get_pixel(nx, ny);
-                let current = pixel.data[0] as u64;
-                if pixel == BLACK {
+                let data = swt.0.get_pixel(nx, ny).data[0];
+                if data == 0 {
                     // The pixel is not part of any contour.
                     continue;
                 }
-                if *explored.get_pixel(nx, ny) != BLACK {
+                if explored.get_pixel(nx, ny).data[0] != 0 {
                     // The component has been visited already.
                     continue;
                 }
-                total_stroke += current;
 
                 // let average = total_stroke / pending.total_pushed()
                 // we must have average <= pixel.data[0] <= average * ratio
                 // or average * ratio <= pixel.data[0] <= average
 
-                let t = current * pending.total_pushed() as u64;
+                let min = swt.0.get_pixel(current.x, current.y).data[0] as f32 / ratio_to_average;// FIXME: Make this faster.
+                let max = swt.0.get_pixel(current.x, current.y).data[0] as f32 * ratio_to_average;// FIXME: Make this faster.
 
-                if (total_stroke <= t && t <= (total_stroke as f32 * ratio_to_average) as u64)
-                || (total_stroke <= (t as f32 * ratio_to_average) as u64 && t <= total_stroke) {
+/*
+                let t = data as f32 * pending.total_pushed() as f32;
+                let min = total_stroke as f32 / ratio_to_average as f32;
+                let max = total_stroke as f32 * ratio_to_average as f32;
+*/
+//                if min <= t && t <= max {
+                if min <= data as f32 && data as f32 <= max {
                     // Smooth variation of Stroke Width: this pixel is part of the same component.
                     pending.push(Point {
                         x: nx,
                         y: ny
                     });
-                    total_stroke += swt.0.get_pixel(nx, ny).data[0] as u64;
+//                    total_stroke += data
                 }
             }
         }
+
         // Contour is complete.
         if component.height() < params.letter_min_height
         || component.height() > params.letter_max_height
@@ -612,7 +668,7 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> Vec<Contour> {
         }
         contours.push(component);
     }
-    contours
+    (contours, explored)
 }
 
 pub struct Letter {
@@ -622,7 +678,6 @@ pub struct Letter {
     std: f32,
     mean: f32,
     contour: Contour,
-    id: usize,
 }
 
 
@@ -631,7 +686,16 @@ struct Swt(GrayImage);
 /// Extract from a swt good candidates for being letters.
 #[allow(dead_code)]
 fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Vec<Letter> {
-    let mut contours = get_connected_components(swt, params);
+    let (mut contours, components_map) = get_connected_components(swt, params);
+    {
+        let colorized = colorize(&components_map);
+        colorized.save("/tmp/output-components.png")
+            .expect("Could not write file");
+    }
+    if contours.len() == 0 {
+        return vec![];
+    }
+
     let (aspect_ratio_min, aspect_ratio_max) =
         if params.letter_max_aspect_ratio < 1. {
             (params.letter_max_aspect_ratio, 1. / params.letter_max_aspect_ratio)
@@ -639,21 +703,24 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
             (1. / params.letter_max_aspect_ratio,  params.letter_max_aspect_ratio)
         };
 
-    let mut strokes = vec![]; // Out of the loop to save some memory management.
-
-    // FIXME: Merge contours that appear inside other contours.
-    let mut id = 0;
+    println!("letters: starting with {} candidates", contours.len());
+    for contour in &contours {
+        println!("({},{})-({},{})", contour.top_left.x, contour.top_left.y, contour.bottom_right.x, contour.bottom_right.y);
+    }
+    let mut strokes = Vec::with_capacity(params.max_width as usize);
     let letters : Vec<_> = contours.drain(..).filter_map(|contour| {
         strokes.clear();
 
         let ratio = contour.ratio();
         if ratio < aspect_ratio_min || ratio > aspect_ratio_max {
             // Bad ratio, discard contour.
+            println!("letters: bad ratio, discard contour {}", ratio);
             return None;
         }
         let ratio = contour.sq_ratio();
         if ratio < aspect_ratio_min || ratio > aspect_ratio_max {
             // Bad ratio, discard contour.
+            println!("letters: bad sq_ratio, discard contour {}", ratio);
             return None;
         }
 
@@ -675,13 +742,12 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
         let variance = total_sq_delta / contour.size() as f32;
 
         if variance > mean * params.std_ratio {
+            println!("letters: bad variance {}, discard contour ({})", variance, mean * params.std_ratio);
             return None;
         }
 
         // Ok, this looks like a letter so far.
-        id += 1;
         let letter = Letter {
-            id: id,
             center: contour.center(),
             std: variance,
             mean: mean,
@@ -692,14 +758,19 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
 
         Some(letter)
     }).collect();
+    drop(contours); // Just to avoid mistakes.
 
-    // The pixmap contains the id of the connected component.
-    let mut pixmap : ImageBuffer<Luma<usize>, _> = ImageBuffer::new(image.width(), image.height());
+    println!("letters: we still have {} candidates", letters.len());
+    if letters.len() == 0 {
+        return vec![];
+    }
+
+    // `false` when we discard letter i
+    let len = letters.iter().map(|letter| letter.contour.id()).max().unwrap() as usize + 1; // We have already verified that letters.len() > 0
+    let mut alive = Vec::with_capacity(len); // FIXME: Replace this with a vecmap.
+    alive.resize(len, false);
     for letter in &letters {
-        // Mark all the pixels that belong to this letter.
-        for point in &letter.contour.points {
-            pixmap.get_pixel_mut(point.x, point.y).data[0] = id;
-        }
+        alive[letter.contour.id() as usize] = true;
     }
 
 
@@ -708,21 +779,24 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
         if let Some(letter_occlude_thresh) = params.letter_occlude_thresh {
             // `true` if there is an intersection between the bounding box of the current letter and
             // an actual pixel of another letter.
-            let mut others : Vec<bool> = Vec::with_capacity(id);
+            let mut intersection : Vec<bool> = Vec::with_capacity(alive.len());
             let mut filtered = vec![];
             'per_letter: for letter in letters {
-                others.clear();
+                intersection.resize(alive.len(), false);
                 let mut intersections = 0;
                 for x in letter.contour.top_left.x .. min(letter.contour.bottom_right.x + 1, image.width()) {
                     for y in letter.contour.top_left.y .. min(letter.contour.bottom_right.y + 1, image.height()) {
-                        let pix_id = pixmap.get_pixel(x, y).data[0];
-                        if pix_id > 0 && pix_id != letter.id && !others[id] {
+                        let pix_id = components_map.get_pixel(x, y).data[0] as usize;
+                        if pix_id > 0 && pix_id != letter.contour.id() as usize {
                             // Look, there's an intersection with another component.
-                            others[pix_id] = true;
-                            intersections += 1;
-                            if intersections > letter_occlude_thresh {
-                                // Get rid of letter.
-                                continue 'per_letter
+                            if alive[pix_id] && !intersection[pix_id] {
+                                intersection[pix_id] = true;
+                                intersections += 1;
+                                if intersections > letter_occlude_thresh {
+                                    // Get rid of letter.
+                                    alive[letter.contour.id() as usize] = false;
+                                    continue 'per_letter
+                                }
                             }
                         }
                     }
@@ -734,6 +808,7 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
             letters
         };
 
+    println!("Computing intensity of remaining letters");
     for letter in &mut letters {
         let mut total_intensity = 0 as u32;
         for point in &letter.contour.points {
@@ -745,15 +820,11 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
     // FIXME: Outputting intermediate image.
     println!("Outputting intermediate image");
     {
-        use std::collections::HashSet;
         use imageproc::map;
 
-        let mut ids = HashSet::new();
-        for letter in &letters {
-            ids.insert(letter.id);
-        }
-        let foo = map::map_pixels(&pixmap, |_, _, pixel| {
-            if ids.contains(&pixel.data[0]) {
+        let foo = map::map_pixels(&components_map, |_, _, pixel| {
+            let id = pixel.data[0] as usize;
+            if id >= alive.len() || alive[id] {
                 pixel
             } else {
                 Luma {
@@ -775,5 +846,6 @@ pub fn detect_words(image: &DynamicImage, params: &SwtParams) {
 //    let mut words = vec![];
     let gray = image.to_luma();
     let swt = Swt(swt(&gray, params, SwtDirection::DarkToBright));
-    let letters_1 = get_connected_letters(&gray, &swt, params);
+    colorize(&swt.0).save("/tmp/output-lighthouse-swt.png").unwrap();
+    let _ = get_connected_letters(&gray, &swt, params);
 }

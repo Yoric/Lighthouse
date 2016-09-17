@@ -111,6 +111,7 @@ pub struct Contour {
     pub points: Vec<Point>,
     pub top_left: Point,
     pub bottom_right: Point,
+    id: u32,
     sum_x: u32,
     sum_y: u32,
     sum_x_y: u64,
@@ -118,11 +119,12 @@ pub struct Contour {
     sum_y_y: u64,
 }
 impl Contour {
-    pub fn new(point: Point) -> Self {
+    pub fn new(point: Point, id: u32) -> Self {
         Contour {
            top_left: point,
            bottom_right: point,
            points: vec![point],
+           id: id,
            sum_x: 0,
            sum_y: 0,
            sum_x_x: 0,
@@ -141,6 +143,8 @@ impl Contour {
         } else if point.y > self.bottom_right.y {
             self.bottom_right.y = point.y;
         }
+        debug_assert!(self.top_left.x <= self.bottom_right.x);
+        debug_assert!(self.top_left.y <= self.bottom_right.y);
         self.sum_x += point.x;
         self.sum_y += point.y;
         self.sum_x_x += point.x as u64 * point.x as u64;
@@ -182,5 +186,8 @@ impl Contour {
     }
     pub fn bound(&self) -> Rect {
         Rect::at(self.top_left.x as i32, self.top_left.y as i32).of_size(self.width(), self.height())
+    }
+    pub fn id(&self) -> u32 {
+        self.id
     }
 }
