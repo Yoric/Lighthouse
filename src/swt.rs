@@ -1,12 +1,15 @@
-use image::*;
-
-use imageproc::definitions::*;
-use imageproc::edges::canny;
-use imageproc::gradients::*;
+use util::*;
 
 use std::cmp::{ max, min };
 
-use util::*;
+use image::*;
+
+//use imageproc::definitions::*;
+//use imageproc::edges::canny;
+//use imageproc::gradients::*;
+
+use vec_map::*;
+
 
 #[derive(Clone, Copy)]
 pub enum SwtDirection {
@@ -114,6 +117,7 @@ impl Default for SwtParams {
 
 /// Complete an outline (as devised by calling sobel), by adding the missing pixels at the
 /// intersection of two edges.
+/*
 pub fn close_outline(image: &GrayImage, threshold: u8) -> GrayImage {
     let mut result = GrayImage::from_pixel(image.width(), image.height(), Luma::black());
 
@@ -146,6 +150,7 @@ pub fn close_outline(image: &GrayImage, threshold: u8) -> GrayImage {
     }
     result
 }
+*/
 
 #[derive(Clone, Debug)]
 struct Ray {
@@ -267,11 +272,11 @@ impl Line {
         let ady = i32::abs(ry_grad);
         Line(Ray {
             x: x as i32,
-            slope_x: if rx_grad <= 0 { direction } else { direction.reverse() } as i32,
+            slope_x: if rx_grad > 0 { direction } else { direction.reverse() } as i32,
             adx: adx,
 
             y: y as i32,
-            slope_y: if ry_grad <= 0 { direction } else { direction.reverse() } as i32,
+            slope_y: if ry_grad > 0 { direction } else { direction.reverse() } as i32,
             ady: ady,
 
             err: adx - ady
@@ -403,23 +408,25 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                     // Leaving the image, no border found.
                     break;
                 }
-                if i32::abs(y as i32 - ray.y as i32) < 3 && i32::abs(x as i32 - ray.x as i32) < 3 {
+
+                if i32::abs(y as i32 - ray.y as i32) < 2 && i32::abs(x as i32 - ray.x as i32) < 2 {
                     // We are looking at another pixel that belongs to the same border, ignore it.
                     continue;
                 }
+
                 // Note that we are not certain that we will encounter an edge. Despite calling
                 // `close_outline`, we may have lost/missed pixels that should be part of the
                 // opposite border.
-                for &(dx, dy) in &[
-                    (-1, 0),
-                    (0,  0),
-                    (1,  0),
-                    (0, -1),
-                    (0,  1)
-                ] {
+                for &(dx, dy) in &[(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
                     let kx = ray.x as i32 + dx;
                     let ky = ray.y as i32 + dy;
-                    if outlines.get_pixel(kx as u32, ky as u32).data[0] > BW_THRESHOLD {
+                    if kx < 1 || kx as u32 >= image.width() {
+                        continue;
+                    }
+                    if ky < 1 || ky as u32 >= image.height() {
+                        continue;
+                    }
+                    if outlines.get_pixel(kx as u32, ky as u32).data[0] >= BW_THRESHOLD {
                         opposite_border = Some((ray, kx, ky));
                         break 'search_opposite;
                     }
@@ -429,33 +436,40 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
             // Make sure that the opposite angle is in d_p ± ~pi/6. Otherwise, we assume that
             // the shape is too exotic and this is not a letter.
             let check_angle = |kx, ky| {
-                for &(dx, dy) in &[
-                    (-1,  0),
-                    (0,   0),
-                    (1,   0),
-                    (-1, -1),
-                    (0,  -1),
-                    (1,  -1),
-                    (-1,  1),
-                    (0,   1),
-                    (1,   1)
-                ] {
-                    let x1 = (kx as i32 + dx) as u32;
-                    let y1 = (ky as i32 + dy) as u32;
-                    let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i64;
-                    let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i64;
-                    let x1_grad_pixel = x_grad.get_pixel(x1, y1).data[0] as i64;
-                    let y1_grad_pixel = y_grad.get_pixel(x1, y1).data[0] as i64;
-                    let tn = i64::abs(y_grad_pixel * x1_grad_pixel - x_grad_pixel * y1_grad_pixel);
-                    let td = i64::abs(x_grad_pixel * x1_grad_pixel - y_grad_pixel * y1_grad_pixel);
-                    // Compute a reasonable apprxomation of `|| tn/td || < pi/6`.
-                    if tn * 7 < td * 4 {
-                        return true
+                for dx in -1 .. 1 + 1 {
+                    for dy in -1 .. 1 + 1 {
+                        let x1 = kx as i32 + dx;
+                        let y1 = ky as i32 + dy;
+                        if x1 < 0 || y1 < 0 {
+                            println!("swt::swt check_angle skipping, we're out of the image {}, {}", x1, y1);
+                            continue;
+                        }
+                        let x1 = x1 as u32;
+                        let y1 = y1 as u32;
+                        if x1 >= outlines.width() || y1 >= outlines.height() {
+                            println!("swt::swt check_angle skipping, we're out of the image {}, {}", x1, y1);
+                            continue;
+                        }
+                        println!("swt::swt checking angle ({},{}) => ({}, {})", x, y, x1, y1);
+                        let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i64;
+                        let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i64;
+                        let x1_grad_pixel = x_grad.get_pixel(x1, y1).data[0] as i64;
+                        let y1_grad_pixel = y_grad.get_pixel(x1, y1).data[0] as i64;
+                        let tn = i64::abs(y_grad_pixel * x1_grad_pixel - x_grad_pixel * y1_grad_pixel);
+                        let td = i64::abs(x_grad_pixel * x1_grad_pixel - y_grad_pixel * y1_grad_pixel);
+                        // Compute a reasonable apprxomation of `|| tn/td || < pi/6`.
+                        println!("swt::swt check_angle {}, {}", tn, td);
+                        if tn * 7 < td * 4 {
+                            println!("swt::swt check_angle good angle {}, {}", tn, td);
+                            return true
+                        }
                     }
                 }
+                println!("swt::swt check_angle bad angle");
                 false
             };
             if let Some((ray, kx, ky)) = opposite_border {
+                println!("swt::swt found an opposite border at ({},{})", kx, ky);
                 if check_angle(kx, ky) {
                     // We have a hit. Now, fill the line with the Stroke Width.
                     let square = |z: i32| z as f32 * z as f32;
@@ -603,58 +617,51 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> (Vec<Contour>, Com
             component.push(current);
 
             // Prepare neighbouring pixels.
-            for &(dx, dy) in &[
-                (-1,  0),
-                (1,   0),
-                (-1, -1),
-                (0,  -1),
-                (1,  -1),
-                (-1,  1),
-                (0,   1),
-                (1,   1)
-            ] {
-                let nx = current.x as i32 + dx;
-                let ny = current.y as i32 + dy;
-                if !(nx >= 0 && ny >= 0) {
-                    // This pixel is out of the picture.
-                    continue;
-                }
-                let nx = nx as u32;
-                let ny = ny as u32;
-                if !(nx < swt.0.width() && ny < swt.0.height()) {
-                    // This pixel is out of the picture.
-                    continue;
-                }
-                let data = swt.0.get_pixel(nx, ny).data[0];
-                if data == 0 {
-                    // The pixel is not part of any contour.
-                    continue;
-                }
-                if explored.get_pixel(nx, ny).data[0] != 0 {
-                    // The component has been visited already.
-                    continue;
-                }
+            for dx in -1..1 + 1 {
+                for dy in -1..1 + 1 {
+                    let nx = current.x as i32 + dx;
+                    let ny = current.y as i32 + dy;
+                    if !(nx >= 0 && ny >= 0) {
+                        // This pixel is out of the picture.
+                        continue;
+                    }
+                    let nx = nx as u32;
+                    let ny = ny as u32;
+                    if !(nx < swt.0.width() && ny < swt.0.height()) {
+                        // This pixel is out of the picture.
+                        continue;
+                    }
+                    let data = swt.0.get_pixel(nx, ny).data[0];
+                    if data == 0 {
+                        // The pixel is not part of any contour.
+                        continue;
+                    }
+                    if explored.get_pixel(nx, ny).data[0] != 0 {
+                        // The component has been visited already.
+                        continue;
+                    }
 
-                // let average = total_stroke / pending.total_pushed()
-                // we must have average <= pixel.data[0] <= average * ratio
-                // or average * ratio <= pixel.data[0] <= average
+                    // let average = total_stroke / pending.total_pushed()
+                    // we must have average <= pixel.data[0] <= average * ratio
+                    // or average * ratio <= pixel.data[0] <= average
 
-                let min = swt.0.get_pixel(current.x, current.y).data[0] as f32 / ratio_to_average;// FIXME: Make this faster.
-                let max = swt.0.get_pixel(current.x, current.y).data[0] as f32 * ratio_to_average;// FIXME: Make this faster.
+                    let min = swt.0.get_pixel(current.x, current.y).data[0] as f32 / ratio_to_average;// FIXME: Make this faster.
+                    let max = swt.0.get_pixel(current.x, current.y).data[0] as f32 * ratio_to_average;// FIXME: Make this faster.
 
-/*
-                let t = data as f32 * pending.total_pushed() as f32;
-                let min = total_stroke as f32 / ratio_to_average as f32;
-                let max = total_stroke as f32 * ratio_to_average as f32;
-*/
-//                if min <= t && t <= max {
-                if min <= data as f32 && data as f32 <= max {
-                    // Smooth variation of Stroke Width: this pixel is part of the same component.
-                    pending.push(Point {
-                        x: nx,
-                        y: ny
-                    });
-//                    total_stroke += data
+    /*
+                    let t = data as f32 * pending.total_pushed() as f32;
+                    let min = total_stroke as f32 / ratio_to_average as f32;
+                    let max = total_stroke as f32 * ratio_to_average as f32;
+    */
+    //                if min <= t && t <= max {
+                    if min <= data as f32 && data as f32 <= max {
+                        // Smooth variation of Stroke Width: this pixel is part of the same component.
+                        pending.push(Point {
+                            x: nx,
+                            y: ny
+                        });
+    //                    total_stroke += data
+                    }
                 }
             }
         }
@@ -671,6 +678,7 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> (Vec<Contour>, Com
     (contours, explored)
 }
 
+#[allow(dead_code)]
 pub struct Letter {
     center: Point,
     thickness: u8,
@@ -766,11 +774,9 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
     }
 
     // `false` when we discard letter i
-    let len = letters.iter().map(|letter| letter.contour.id()).max().unwrap() as usize + 1; // We have already verified that letters.len() > 0
-    let mut alive = Vec::with_capacity(len); // FIXME: Replace this with a vecmap.
-    alive.resize(len, false);
+    let mut alive = VecMap::with_capacity(letters.len()); // Note: Capacity may need to grow.
     for letter in &letters {
-        alive[letter.contour.id() as usize] = true;
+        alive.insert(letter.contour.id() as usize, true);
     }
 
 
@@ -779,23 +785,25 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
         if let Some(letter_occlude_thresh) = params.letter_occlude_thresh {
             // `true` if there is an intersection between the bounding box of the current letter and
             // an actual pixel of another letter.
-            let mut intersection : Vec<bool> = Vec::with_capacity(alive.len());
+            let mut intersection = VecMap::with_capacity(alive.len());
             let mut filtered = vec![];
             'per_letter: for letter in letters {
-                intersection.resize(alive.len(), false);
+                intersection.clear();
                 let mut intersections = 0;
                 for x in letter.contour.top_left.x .. min(letter.contour.bottom_right.x + 1, image.width()) {
                     for y in letter.contour.top_left.y .. min(letter.contour.bottom_right.y + 1, image.height()) {
                         let pix_id = components_map.get_pixel(x, y).data[0] as usize;
                         if pix_id > 0 && pix_id != letter.contour.id() as usize {
                             // Look, there's an intersection with another component.
-                            if alive[pix_id] && !intersection[pix_id] {
-                                intersection[pix_id] = true;
-                                intersections += 1;
-                                if intersections > letter_occlude_thresh {
-                                    // Get rid of letter.
-                                    alive[letter.contour.id() as usize] = false;
-                                    continue 'per_letter
+                            if let Some(&true) = alive.get(pix_id) {
+                                if let None = intersection.get(pix_id) {
+                                    intersection.insert(pix_id, true);
+                                    intersections += 1;
+                                    if intersections > letter_occlude_thresh {
+                                        // Get rid of letter.
+                                        alive.insert(letter.contour.id() as usize, false);
+                                        continue 'per_letter
+                                    }
                                 }
                             }
                         }
@@ -824,7 +832,7 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
 
         let foo = map::map_pixels(&components_map, |_, _, pixel| {
             let id = pixel.data[0] as usize;
-            if id >= alive.len() || alive[id] {
+            if let Some(&true) = alive.get(id) {
                 pixel
             } else {
                 Luma {

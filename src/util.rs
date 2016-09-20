@@ -184,6 +184,7 @@ impl Contour {
             y: y
         }
     }
+    #[allow(dead_code)]
     pub fn bound(&self) -> Rect {
         Rect::at(self.top_left.x as i32, self.top_left.y as i32).of_size(self.width(), self.height())
     }

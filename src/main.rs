@@ -3,6 +3,7 @@ extern crate image;
 extern crate imageproc;
 extern crate itertools;
 extern crate rand;
+extern crate vec_map;
 
 #[macro_use]
 extern crate log;
@@ -10,13 +11,13 @@ extern crate env_logger;
 
 use ccv::{ Matrix, OpenAs, FileFormat };
 use ccv::swt::*;
-use ccv::edges::*;
+//use ccv::edges::*;
 //use image::*;
-use imageproc::edges::*;
-use imageproc::gradients::*;
+//use imageproc::edges::*;
+//use imageproc::gradients::*;
 
-use image::*;
-use imageproc::map::*;
+//use image::*;
+//use imageproc::map::*;
 
 // mod clean;
 mod swt;
@@ -24,7 +25,7 @@ mod util;
 
 use std::default::Default;
 use std::env::args;
-use std::cmp::min;
+//use std::cmp::min;
 
 fn main() {
     env_logger::init().unwrap();
@@ -32,7 +33,7 @@ fn main() {
     let mut args = args();
     let _ = args.next().unwrap(); // Ignore executable name.
     let source = args.next().expect("Expected source file name.");
-    let dest   = args.next().expect("Expected destination file name.");
+    //let dest   = args.next().expect("Expected destination file name.");
 
 /*
     let params = swt::SwtParams::default();
