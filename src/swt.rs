@@ -252,10 +252,19 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
         // casting a ray in a different direction. Note that we only cast rays towards the
         // right, as we are scanning the image from the left.
 
+        let has_collision = |point: &Point| {
+            if point.x < 0 || point.x as u32 >= image.width()
+            || point.y < 0 || point.y as u32 >= image.height()
+            {
+                return false
+            }
+            return outlines.get_pixel(point.x as u32, point.y as u32).data[0] >= BW_THRESHOLD
+        };
+
         let x_grad_start = dx_grads.get_pixel(x, y).data[0] as i32;
         let y_grad_start = dy_grads.get_pixel(x, y).data[0] as i32;
 
-        for &(xx, xy, yx, yy) in &[
+        'launch_rays: for &(xx, xy, yx, yy) in &[
             (1, 0, 0, 1), // Launch a ray along the gradient.
             (1, 1, -1, 1),// Launch a ray along gradient -pi/8
             (1, -1, 1, 1) // Launch a ray along gradient +pi/8
@@ -264,7 +273,7 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
             let slope_y = (x_grad_start * yx + y_grad_start * yy) * direction as i32;
 
             if slope_x == 0 && slope_y == 0 {
-                // No gradient here. Let's avoid an infinite loop.
+                // No gradient here, no ray to cast.
                 continue;
             }
 
@@ -272,6 +281,13 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
             let mut end = None;
 
             println!("swt::swt iterating from ({},{}) => ({}, {})", x, y, slope_x, slope_y);
+
+/*
+            let second = ray.skip(1).next().expect("Could not walk ray");
+            if has_collision(&second) {
+                continue 'launch_rays
+            }
+*/
 
             // For performance reasons, limit how far we are willing to search for an
             // opposite border.
@@ -294,17 +310,13 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                 // `close_outline`, we may have lost/missed pixels that should be part of the
                 // opposite border.
                 'detect_collision: for &(dx, dy) in &[(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
-                    let kx = point.x as i32 + dx;
-                    let ky = point.y as i32 + dy;
-                    if kx < 1 || kx as u32 >= image.width() {
-                        continue;
-                    }
-                    if ky < 1 || ky as u32 >= image.height() {
-                        continue;
-                    }
-                    if outlines.get_pixel(kx as u32, ky as u32).data[0] >= BW_THRESHOLD {
-                        end = Some(Point { x: kx, y: ky });
-                        println!("swt::swt detected collision ({},{})", kx, ky);
+                    let target = Point {
+                        x: point.x + dx,
+                        y: point.y + dy
+                    };
+                    if has_collision(&target) {
+                        println!("swt::swt detected collision ({},{})", target.x, target.y);
+                        end = Some(target);
                         break 'detect_collision;
                     }
                 }
@@ -710,7 +722,7 @@ pub fn detect_words(image: &DynamicImage, params: &SwtParams) {
     // FIXME: Implement downsizing.
 //    let mut words = vec![];
     let gray = image.to_luma();
-    let swt = Swt(swt(&gray, params, SwtDirection::DarkToBright));
+    let swt = Swt(swt(&gray, params, SwtDirection::BrightToDark));
     colorize(&swt.0).save("/tmp/output-lighthouse-swt.png").unwrap();
     let _ = get_connected_letters(&gray, &swt, params);
 }
