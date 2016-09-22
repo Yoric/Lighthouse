@@ -96,15 +96,17 @@ impl<T> Queue<T> where T: Copy {
     pub fn is_empty(&self) -> bool {
         self.data.len() == self.consumed
     }
+/*
     pub fn total_pushed(&self) -> usize {
         self.data.len()
     }
+*/
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Point {
-    pub x: u32,
-    pub y: u32,
+    pub x: i32,
+    pub y: i32,
 }
 
 pub struct Contour {
@@ -145,20 +147,22 @@ impl Contour {
         }
         debug_assert!(self.top_left.x <= self.bottom_right.x);
         debug_assert!(self.top_left.y <= self.bottom_right.y);
-        self.sum_x += point.x;
-        self.sum_y += point.y;
+        self.sum_x += point.x as u32;
+        self.sum_y += point.y as u32;
         self.sum_x_x += point.x as u64 * point.x as u64;
         self.sum_x_y += point.x as u64 * point.y as u64;
         self.sum_y_y += point.y as u64 * point.y as u64;
         self.points.push(point);
     }
     pub fn height(&self) -> u32 {
-        // Note: Operation is on u32, so this will assert that the result > 0
-        self.bottom_right.x - self.top_left.x + 1
+        let result = self.bottom_right.x - self.top_left.x + 1;
+        assert!(result >= 0);
+        result as u32
     }
     pub fn width(&self) -> u32 {
-        // Note: Operation is on u32, so this will assert that the result > 0
-        self.bottom_right.y - self.top_left.y + 1
+        let result = self.bottom_right.y - self.top_left.y + 1;
+        assert!(result >= 0);
+        result as u32
     }
     pub fn ratio(&self) -> f32 {
         self.height() as f32 / self.width() as f32

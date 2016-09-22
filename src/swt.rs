@@ -1,29 +1,21 @@
+use line::*;
 use util::*;
 
 use std::cmp::{ max, min };
 
 use image::*;
 
-//use imageproc::definitions::*;
-//use imageproc::edges::canny;
-//use imageproc::gradients::*;
+use imageproc::definitions::*;
+use imageproc::edges::canny;
+use imageproc::gradients::*;
 
 use vec_map::*;
 
 
 #[derive(Clone, Copy)]
 pub enum SwtDirection {
-    DarkToBright = 1,
-    BrightToDark = -1,
-}
-impl SwtDirection {
-    pub fn reverse(&self) -> SwtDirection {
-        use self::SwtDirection::*;
-        match *self {
-            DarkToBright => BrightToDark,
-            BrightToDark => DarkToBright
-        }
-    }
+    DarkToBright = -1,
+    BrightToDark = 1,
 }
 pub struct SwtParams {
     /// Intervals for scale invariant option.
@@ -115,9 +107,18 @@ impl Default for SwtParams {
     }
 }
 
+struct Stroke {
+    segment: Segment,
+    width: u8,
+}
+impl Stroke {
+    fn iter(&self) -> SegmentIterator {
+        self.segment.iter()
+    }
+}
+
 /// Complete an outline (as devised by calling sobel), by adding the missing pixels at the
 /// intersection of two edges.
-/*
 pub fn close_outline(image: &GrayImage, threshold: u8) -> GrayImage {
     let mut result = GrayImage::from_pixel(image.width(), image.height(), Luma::black());
 
@@ -149,156 +150,6 @@ pub fn close_outline(image: &GrayImage, threshold: u8) -> GrayImage {
         }
     }
     result
-}
-*/
-
-#[derive(Clone, Debug)]
-struct Ray {
-    x: i32,
-    slope_x: i32,
-    adx: i32,
-    y: i32,
-    slope_y: i32,
-    ady: i32,
-    err: i32,
-}
-
-#[derive(Debug)]
-struct RayDirection {
-    xx: i32,
-    xy: i32,
-    yx: i32,
-    yy: i32
-}
-
-#[derive(Debug)]
-struct Stroke {
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    width: u8,
-}
-impl Stroke {
-    fn iter(&self) -> StrokeIterator {
-        let adx = i32::abs(self.x1 - self.x0);
-        let ady = i32::abs(self.y1 - self.y0);
-        let slope_x = if self.x1 > self.x0 { 1 } else { -1 };
-        let slope_y = if self.y1 > self.y0 { 1 } else { -1 };
-
-        let ray = Ray {
-            x: self.x0,
-            y: self.y0,
-            slope_x: slope_x,
-            slope_y: slope_y,
-            adx: adx,
-            ady: ady,
-            err: adx - ady
-        };
-
-        StrokeIterator {
-            ray: Some(ray),
-            x1: self.x1,
-            y1: self.y1
-        }
-    }
-}
-
-
-struct StrokeIterator {
-    ray: Option<Ray>,
-    x1: i32,
-    y1: i32
-}
-impl Iterator for StrokeIterator {
-    type Item = (u32, u32);
-    fn next(&mut self) -> Option<Self::Item> {
-        let done;
-        let result;
-        match self.ray {
-            None => {
-                done = true;
-                result = None
-            }
-            Some(ref mut ray) => {
-                result = Some((ray.x as u32, ray.y as u32));
-                if ray.x == self.x1 && ray.y == self.y1 {
-                    done = true;
-                } else {
-                    ray.increment();
-                    done = false;
-                }
-            }
-        }
-        if done {
-            self.ray = None
-        }
-        result
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Line(Ray);
-
-struct LineIterator(Ray);
-
-
-impl Iterator for LineIterator {
-    type Item = Point;
-    fn next(&mut self) -> Option<Self::Item> {
-        let ref mut ray = self.0;
-        let result = Some(Point {
-            x: ray.x as u32,
-            y: ray.y as u32
-        });
-        ray.increment();
-        result
-    }
-}
-
-impl Line {
-    fn from_grad(x: u32, y: u32,
-            x_grad: &ImageBuffer<Luma<u8>, Vec<u8>>,
-            y_grad: &ImageBuffer<Luma<u8>, Vec<u8>>,
-            vector: &RayDirection,
-            direction: SwtDirection) -> Line {
-        let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i32;
-        let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i32;
-        let rx_grad = x_grad_pixel * vector.xx + y_grad_pixel * vector.xy;
-        let ry_grad = x_grad_pixel * vector.yx + y_grad_pixel * vector.yy;
-//        println!("Line::from_grad ({}, {})", x_grad_pixel, y_grad_pixel);
-
-        let adx = i32::abs(rx_grad);
-        let ady = i32::abs(ry_grad);
-        Line(Ray {
-            x: x as i32,
-            slope_x: if rx_grad > 0 { direction } else { direction.reverse() } as i32,
-            adx: adx,
-
-            y: y as i32,
-            slope_y: if ry_grad > 0 { direction } else { direction.reverse() } as i32,
-            ady: ady,
-
-            err: adx - ady
-        })
-    }
-    fn iter(&self) -> LineIterator {
-        LineIterator(self.0.clone())
-    }
-}
-
-impl Ray {
-    fn increment(&mut self) {
-        let e2 = 2 * self.err;
-        if e2 > -self.ady {
-            self.err -= self.ady;
-            self.x += self.slope_x
-        }
-        if e2 < self.adx {
-            self.err += self.adx;
-            self.y += self.slope_y;
-        }
-    }
 }
 
 /*
@@ -340,11 +191,6 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
     let mut strokes = vec![];
 
 /*
-    // Compute all outlines on the image...
-    let edges = canny(image, params.canny_low, params.canny_high);
-    // ... and improve the chances that they are closed.
-    let outlines = close_outline(&edges, BW_THRESHOLD);
-*/
 // FIXME: What if we did it with CCV?
     {
         use ccv::*;
@@ -363,19 +209,24 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
             .write("/tmp/output-ref-dy.png", FileFormat::PNG);
     }
 
-    let x_grad = open("/tmp/output-ref-dx.png").unwrap().to_luma();
-    let y_grad = open("/tmp/output-ref-dy.png").unwrap().to_luma();
+    let dx_grads = open("/tmp/output-ref-dx.png").unwrap().to_luma();
+    let dy_grads = open("/tmp/output-ref-dy.png").unwrap().to_luma();
     let outlines = open("/tmp/output-ref-outline.png").unwrap().to_luma();
-/*
-    // Compute gradients.
-    let y_grad = horizontal_sobel(image);
-    let x_grad = vertical_sobel(image);
-*/
+    */
 
-    colorize(&x_grad)
+    // Compute all outlines on the image...
+    let edges = canny(image, params.canny_low, params.canny_high);
+    // ... and improve the chances that they are closed.
+    let outlines = close_outline(&edges, BW_THRESHOLD);
+
+    // Compute gradients.
+    let dy_grads = horizontal_sobel(image);
+    let dx_grads = vertical_sobel(image);
+
+    colorize(&dx_grads)
         .save("/tmp/output-colorized-x.png")
         .expect("Could not save colorized-x");
-    colorize(&y_grad)
+    colorize(&dy_grads)
         .save("/tmp/output-colorized-y.png")
         .expect("Could not save colorized-y");
     colorize(&outlines)
@@ -383,43 +234,68 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
         .expect("Could not save outlines");
 
     for (x, y, outline) in outlines.enumerate_pixels() {
+        if outline.data[0] < BW_THRESHOLD {
+            // This pixel is not part of the outline, no need to throw rays.
+            continue;
+        }
+        println!("swt::swt: starting from ({}, {}) ({})", x, y, outline.data[0]);
+
+        let start = Point {
+            x: x as i32,
+            y: y as i32
+        };
+
         // This pixel is part of the outline, so we suspect that it's the border of a shape,
         // possibly a letter.
         //
         // Cast a few rays to find an opposite border. Each call to `ray_emit` corresponds to
         // casting a ray in a different direction. Note that we only cast rays towards the
         // right, as we are scanning the image from the left.
-        let mut ray_emit = |vector| {
-            let line = Line::from_grad(x, y, &x_grad, &y_grad, &vector, direction);
 
-            println!("swt::swt ray_emit ({}, {}) with ({}, {}) and ({}, {})", line.0.x, line.0.y, line.0.slope_x, line.0.slope_y, line.0.adx, line.0.ady);
+        let x_grad_start = dx_grads.get_pixel(x, y).data[0] as i32;
+        let y_grad_start = dy_grads.get_pixel(x, y).data[0] as i32;
 
-            // `Some((kx, ky))` once we have found an opposite border.
-            let mut opposite_border = None;
+        for &(xx, xy, yx, yy) in &[
+            (1, 0, 0, 1), // Launch a ray along the gradient.
+            (1, 1, -1, 1),// Launch a ray along gradient -pi/8
+            (1, -1, 1, 1) // Launch a ray along gradient +pi/8
+        ] {
+            let slope_x = (x_grad_start * xx + y_grad_start * xy) * direction as i32;
+            let slope_y = (x_grad_start * yx + y_grad_start * yy) * direction as i32;
+
+            if slope_x == 0 && slope_y == 0 {
+                // No gradient here. Let's avoid an infinite loop.
+                continue;
+            }
+
+            let ray = RayIterator::new(Point { x: x as i32, y: y as i32 }, slope_x, slope_y);
+            let mut end = None;
+
+            println!("swt::swt iterating from ({},{}) => ({}, {})", x, y, slope_x, slope_y);
 
             // For performance reasons, limit how far we are willing to search for an
             // opposite border.
-            'search_opposite: for (ray, _) in line.iter().skip(1).zip(0 .. params.max_width) {
-                if ray.x < 1 || ray.x >= image.width() - 1 {
+            'walk_ray: for (point, _) in ray.skip(1).zip(0 .. params.max_width) {
+                println!("swt::swt examining ({},{})", point.x, point.y);
+                if point.x < 1 || point.x >= image.width() as i32 - 1
+                || point.y < 1 || point.y >= image.height() as i32 - 1 {
                     // Leaving the image, no border found.
-                    break;
-                }
-                if ray.y < 1 || ray.y >= image.height() - 1 {
-                    // Leaving the image, no border found.
-                    break;
+                    println!("swt::swt leaving the image, bailing out");
+                    break 'walk_ray;
                 }
 
-                if i32::abs(y as i32 - ray.y as i32) < 2 && i32::abs(x as i32 - ray.x as i32) < 2 {
+                if i32::abs(start.y - point.y) < 2 && i32::abs(start.x - point.x) < 2 {
                     // We are looking at another pixel that belongs to the same border, ignore it.
-                    continue;
+                    println!("swt::swt too close, ignoring point");
+                    continue 'walk_ray;
                 }
 
                 // Note that we are not certain that we will encounter an edge. Despite calling
                 // `close_outline`, we may have lost/missed pixels that should be part of the
                 // opposite border.
-                for &(dx, dy) in &[(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
-                    let kx = ray.x as i32 + dx;
-                    let ky = ray.y as i32 + dy;
+                'detect_collision: for &(dx, dy) in &[(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let kx = point.x as i32 + dx;
+                    let ky = point.y as i32 + dy;
                     if kx < 1 || kx as u32 >= image.width() {
                         continue;
                     }
@@ -427,98 +303,79 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                         continue;
                     }
                     if outlines.get_pixel(kx as u32, ky as u32).data[0] >= BW_THRESHOLD {
-                        opposite_border = Some((ray, kx, ky));
-                        break 'search_opposite;
+                        end = Some(Point { x: kx, y: ky });
+                        println!("swt::swt detected collision ({},{})", kx, ky);
+                        break 'detect_collision;
                     }
                 }
-            }
 
-            // Make sure that the opposite angle is in d_p ± ~pi/6. Otherwise, we assume that
-            // the shape is too exotic and this is not a letter.
-            let check_angle = |kx, ky| {
-                for dx in -1 .. 1 + 1 {
+                // Unwrap `end` or break loop.
+                let end = match end {
+                    None => break 'walk_ray,
+                    Some(point) => point,
+                };
+
+                // At this stage, we know that we have found an opposite border.
+                // Make sure that the opposite gradient is in d_p ± ~pi/6. Otherwise, we assume that
+                // the shape is too exotic and this is not a letter.
+                'find_gradient: for dx in -1 .. 1 + 1 {
                     for dy in -1 .. 1 + 1 {
-                        let x1 = kx as i32 + dx;
-                        let y1 = ky as i32 + dy;
-                        if x1 < 0 || y1 < 0 {
-                            println!("swt::swt check_angle skipping, we're out of the image {}, {}", x1, y1);
-                            continue;
+                        let current = Point {
+                            x: end.x + dx,
+                            y: end.y + dy
+                        };
+                        if current.x < 0 || current.y < 0
+                            || current.x as u32 >= outlines.width()
+                            || current.y as u32 >= outlines.height()
+                        {
+                            panic!("For some reason, the reference implementation assumes that this can't happen")
                         }
-                        let x1 = x1 as u32;
-                        let y1 = y1 as u32;
-                        if x1 >= outlines.width() || y1 >= outlines.height() {
-                            println!("swt::swt check_angle skipping, we're out of the image {}, {}", x1, y1);
-                            continue;
-                        }
-                        println!("swt::swt checking angle ({},{}) => ({}, {})", x, y, x1, y1);
-                        let x_grad_pixel = x_grad.get_pixel(x, y).data[0] as i64;
-                        let y_grad_pixel = y_grad.get_pixel(x, y).data[0] as i64;
-                        let x1_grad_pixel = x_grad.get_pixel(x1, y1).data[0] as i64;
-                        let y1_grad_pixel = y_grad.get_pixel(x1, y1).data[0] as i64;
-                        let tn = i64::abs(y_grad_pixel * x1_grad_pixel - x_grad_pixel * y1_grad_pixel);
-                        let td = i64::abs(x_grad_pixel * x1_grad_pixel - y_grad_pixel * y1_grad_pixel);
+
+                        let x_grad_current = dx_grads.get_pixel(current.x as u32, current.y as u32).data[0] as i64;
+                        let y_grad_current = dy_grads.get_pixel(current.x as u32, current.y as u32).data[0] as i64;
+                        let x_grad_start = x_grad_start as i64;
+                        let y_grad_start = y_grad_start as i64;
+
+                        let tn = y_grad_start * x_grad_current - x_grad_start * y_grad_current;
+                        let td = x_grad_start * x_grad_current + y_grad_start * y_grad_current;
+                        println!("swt::swt tn/td: {}", (tn as f32) / (td as f32));
+
                         // Compute a reasonable apprxomation of `|| tn/td || < pi/6`.
-                        println!("swt::swt check_angle {}, {}", tn, td);
-                        if tn * 7 < td * 4 {
-                            println!("swt::swt check_angle good angle {}, {}", tn, td);
-                            return true
+                        if !(tn * 7 < - td * 4 && tn * 7 > td * 4) {
+                            println!("swt::swt so far, no good angle");
+                            continue;
                         }
-                    }
-                }
-                println!("swt::swt check_angle bad angle");
-                false
-            };
-            if let Some((ray, kx, ky)) = opposite_border {
-                println!("swt::swt found an opposite border at ({},{})", kx, ky);
-                if check_angle(kx, ky) {
-                    // We have a hit. Now, fill the line with the Stroke Width.
-                    let square = |z: i32| z as f32 * z as f32;
-                    let width = f32::sqrt (square(ray.x as i32 - x as i32) + square(ray.y as i32 - y as i32) + 0.5 /*extend the line to be of width 1*/) as u8;
-                    let stroke = Stroke {
-                        x0: x as i32,
-                        y0: y as i32,
-                        x1: ray.x as i32,
-                        y1: ray.y as i32,
-                        width: width
-                    };
-                    for (x1, y1) in stroke.iter() {
-                        let pixel = stroke_widths.get_pixel_mut(x1, y1);
-                        if pixel.data[0] == 0 || width <= pixel.data[0] {
-                            // We have found a shorter width. Update.
-                            pixel.data[0] = width;
+
+
+                        println!("swt::swt found an opposite border with the right gradient");
+                        // We have a hit. Now, fill the line with the Stroke Width.
+                        let square = |z: i32| z as f32 * z as f32;
+                        let width = f32::sqrt (square(start.x - end.x) + square(start.y - end.y) + 0.5 /*extend the line to be of width 1*/) as u8;
+                        let stroke = Stroke {
+                            segment: Segment {
+                                start: start.clone(),
+                                stop: current.clone(), // FIXME: If we really wanted to, we could avoid the clone here.
+                            },
+                            width: width
+                        };
+                        for current in stroke.iter() {
+                            let pixel = stroke_widths.get_pixel_mut(current.x as u32, current.y as u32);
+                            if pixel.data[0] == 0 || width <= pixel.data[0] {
+                                // We have found a shorter width. Update.
+                                pixel.data[0] = width;
+                            }
                         }
+//                        println!("swt::swt: stroke ({},{}) => ({},{}) {}", stroke.segment.start.x, stroke.y0, stroke.x1, stroke.y1, stroke.width);
+
+                        // Finally, record the stroke.
+
+                        strokes.push(stroke);
+
+                        break 'find_gradient
                     }
-                    println!("swt::swt: stroke ({},{}) => ({},{}) {}", stroke.x0, stroke.y0, stroke.x1, stroke.y1, stroke.width);
-
-                    // Finally, record the stroke.
-
-                    strokes.push(stroke);
                 }
             }
-        };
-        if outline.data[0] < BW_THRESHOLD {
-            // This pixel is not part of the outline, no need to throw rays.
-            continue;
         }
-        println!("swt::swt: starting from ({}, {}) ({})", x, y, outline.data[0]);
-        ray_emit(RayDirection {
-            xx: 1,
-            xy: 0,
-            yx: 0,
-            yy: 1
-        });
-        ray_emit(RayDirection {
-            xx: 1,
-            xy: -1,
-            yx: 1,
-            yy: 1
-        });
-        ray_emit(RayDirection {
-            xx: 1,
-            xy: 1,
-            yx: -1,
-            yy: 1
-        });
     }
 
     // The Stroke Width computed so far works nicely for simple forms, but forks, intersections,
@@ -533,15 +390,15 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
     let mut buf = Vec::with_capacity(max(image.width(), image.height()) as usize);
     for stroke in strokes.drain(..) {
         buf.clear();
-        for (x, y) in stroke.iter() {
-            buf.push(stroke_widths.get_pixel(x, y).data[0]);
+        for point in stroke.iter() {
+            buf.push(stroke_widths.get_pixel(point.x as u32, point.y as u32).data[0]);
         }
         if let Some(nw) = median(&buf) {
             if nw != stroke.width {
                 // Repaint stroke.
                 assert!(nw < stroke.width, "I believe that we can only decrease here, right?");
-                for (x, y) in stroke.iter() {
-                    stroke_widths.get_pixel_mut(x, y).data[0] = nw;
+                for point in stroke.iter() {
+                    stroke_widths.get_pixel_mut(point.x as u32, point.y as u32).data[0] = nw;
                 }
             }
         }
@@ -592,8 +449,8 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> (Vec<Contour>, Com
         let id = id_generator;
         debug_assert!(id > 0);
         let point = Point {
-            x: start_x,
-            y: start_y
+            x: start_x as i32,
+            y: start_y as i32
         };
         let mut component = Contour::new(point, id);
 
@@ -608,12 +465,12 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> (Vec<Contour>, Com
             // Advance by one.
             let current = pending.pop().unwrap();
 
-            if explored.get_pixel(current.x, current.y).data[0] != 0 {
+            if explored.get_pixel(current.x as u32, current.y as u32).data[0] != 0 {
                 // The component has been visited already.
                 continue;
             }
             // Mark the pixel as visited.
-            *explored.get_pixel_mut(current.x, current.y) = Luma { data: [id] };
+            *explored.get_pixel_mut(current.x as u32, current.y as u32) = Luma { data: [id] };
             component.push(current);
 
             // Prepare neighbouring pixels.
@@ -645,8 +502,8 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> (Vec<Contour>, Com
                     // we must have average <= pixel.data[0] <= average * ratio
                     // or average * ratio <= pixel.data[0] <= average
 
-                    let min = swt.0.get_pixel(current.x, current.y).data[0] as f32 / ratio_to_average;// FIXME: Make this faster.
-                    let max = swt.0.get_pixel(current.x, current.y).data[0] as f32 * ratio_to_average;// FIXME: Make this faster.
+                    let min = swt.0.get_pixel(current.x as u32, current.y as u32).data[0] as f32 / ratio_to_average;// FIXME: Make this faster.
+                    let max = swt.0.get_pixel(current.x as u32, current.y as u32).data[0] as f32 * ratio_to_average;// FIXME: Make this faster.
 
     /*
                     let t = data as f32 * pending.total_pushed() as f32;
@@ -657,8 +514,8 @@ fn get_connected_components(swt: &Swt, params: &SwtParams) -> (Vec<Contour>, Com
                     if min <= data as f32 && data as f32 <= max {
                         // Smooth variation of Stroke Width: this pixel is part of the same component.
                         pending.push(Point {
-                            x: nx,
-                            y: ny
+                            x: nx as i32,
+                            y: ny as i32
                         });
     //                    total_stroke += data
                     }
@@ -735,7 +592,7 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
         // Compute mean stroke along the contour.
         let mut total_stroke = 0;
         for point in &contour.points {
-            let stroke = swt.0.get_pixel(point.x, point.y).data[0];
+            let stroke = swt.0.get_pixel(point.x as u32, point.y as u32).data[0];
             strokes.push(stroke);
             total_stroke += stroke as u64;
         }
@@ -744,7 +601,7 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
         // Compute variance along the contour.
         let mut total_sq_delta = 0.0;
         for point in &contour.points {
-            let delta = mean as f32 - swt.0.get_pixel(point.x, point.y).data[0] as f32;
+            let delta = mean as f32 - swt.0.get_pixel(point.x as u32, point.y as u32).data[0] as f32;
             total_sq_delta += delta * delta;
         }
         let variance = total_sq_delta / contour.size() as f32;
@@ -790,9 +647,9 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
             'per_letter: for letter in letters {
                 intersection.clear();
                 let mut intersections = 0;
-                for x in letter.contour.top_left.x .. min(letter.contour.bottom_right.x + 1, image.width()) {
-                    for y in letter.contour.top_left.y .. min(letter.contour.bottom_right.y + 1, image.height()) {
-                        let pix_id = components_map.get_pixel(x, y).data[0] as usize;
+                for x in letter.contour.top_left.x .. min(letter.contour.bottom_right.x + 1, image.width() as i32) {
+                    for y in letter.contour.top_left.y .. min(letter.contour.bottom_right.y + 1, image.height() as i32) {
+                        let pix_id = components_map.get_pixel(x as u32, y as u32).data[0] as usize;
                         if pix_id > 0 && pix_id != letter.contour.id() as usize {
                             // Look, there's an intersection with another component.
                             if let Some(&true) = alive.get(pix_id) {
@@ -820,7 +677,7 @@ fn get_connected_letters(image: &GrayImage, swt: &Swt, params: &SwtParams) -> Ve
     for letter in &mut letters {
         let mut total_intensity = 0 as u32;
         for point in &letter.contour.points {
-            total_intensity += image.get_pixel(point.x, point.y).data[0] as u32
+            total_intensity += image.get_pixel(point.x as u32, point.y as u32).data[0] as u32
         }
         letter.intensity = total_intensity / letter.contour.size()
     }

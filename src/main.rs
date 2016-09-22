@@ -20,6 +20,7 @@ use ccv::swt::*;
 //use imageproc::map::*;
 
 // mod clean;
+mod line;
 mod swt;
 mod util;
 
