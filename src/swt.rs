@@ -209,8 +209,8 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
             .write("/tmp/output-ref-dy.png", FileFormat::PNG);
     }
 
-    let dx_grads = open("/tmp/output-ref-dx.png").unwrap().to_luma();
-    let dy_grads = open("/tmp/output-ref-dy.png").unwrap().to_luma();
+    let dx_gradients = open("/tmp/output-ref-dx.png").unwrap().to_luma();
+    let dy_gradients = open("/tmp/output-ref-dy.png").unwrap().to_luma();
     let outlines = open("/tmp/output-ref-outline.png").unwrap().to_luma();
     */
 
@@ -219,14 +219,15 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
     // ... and improve the chances that they are closed.
     let outlines = close_outline(&edges, BW_THRESHOLD);
 
-    // Compute gradients.
-    let dy_grads = horizontal_sobel(image);
-    let dx_grads = vertical_sobel(image);
 
-    colorize(&dx_grads)
+    // Compute gradients.
+    let dy_gradients = horizontal_sobel(image);
+    let dx_gradients = vertical_sobel(image);
+
+    colorize(&dx_gradients)
         .save("/tmp/output-colorized-x.png")
         .expect("Could not save colorized-x");
-    colorize(&dy_grads)
+    colorize(&dy_gradients)
         .save("/tmp/output-colorized-y.png")
         .expect("Could not save colorized-y");
     colorize(&outlines)
@@ -238,8 +239,6 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
             // This pixel is not part of the outline, no need to throw rays.
             continue;
         }
-        println!("swt::swt: starting from ({}, {}) ({})", x, y, outline.data[0]);
-
         let start = Point {
             x: x as i32,
             y: y as i32
@@ -261,23 +260,26 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
             return outlines.get_pixel(point.x as u32, point.y as u32).data[0] >= BW_THRESHOLD
         };
 
-        let x_grad_start = dx_grads.get_pixel(x, y).data[0] as i32;
-        let y_grad_start = dy_grads.get_pixel(x, y).data[0] as i32;
+        let x_gradient_start = dx_gradients.get_pixel(x, y).data[0] as i32;
+        let y_gradient_start = dy_gradients.get_pixel(x, y).data[0] as i32;
+
+        println!("swt::swt: starting from ({}, {}) ({})", x, y, outline.data[0]);
+        println!(" angle: {}", f32::atan(y_gradient_start as f32 / x_gradient_start as f32));
 
         'launch_rays: for &(xx, xy, yx, yy) in &[
             (1, 0, 0, 1), // Launch a ray along the gradient.
             (1, 1, -1, 1),// Launch a ray along gradient -pi/8
             (1, -1, 1, 1) // Launch a ray along gradient +pi/8
         ] {
-            let slope_x = (x_grad_start * xx + y_grad_start * xy) * direction as i32;
-            let slope_y = (x_grad_start * yx + y_grad_start * yy) * direction as i32;
+            let slope_x = - (x_gradient_start * xx + y_gradient_start * xy) * direction as i32;
+            let slope_y = - (x_gradient_start * yx + y_gradient_start * yy) * direction as i32;
 
             if slope_x == 0 && slope_y == 0 {
                 // No gradient here, no ray to cast.
                 continue;
             }
 
-            let ray = RayIterator::new(Point { x: x as i32, y: y as i32 }, slope_x, slope_y);
+            let ray = RayIterator::new(Point { x: x as i32, y: y as i32 }, slope_y, slope_x); // FIXME: Exchanged dx/dy
             let mut end = None;
 
             println!("swt::swt iterating from ({},{}) => ({}, {})", x, y, slope_x, slope_y);
@@ -323,7 +325,7 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
 
                 // Unwrap `end` or break loop.
                 let end = match end {
-                    None => break 'walk_ray,
+                    None => continue 'walk_ray,
                     Some(point) => point,
                 };
 
@@ -343,14 +345,17 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                             panic!("For some reason, the reference implementation assumes that this can't happen")
                         }
 
-                        let x_grad_current = dx_grads.get_pixel(current.x as u32, current.y as u32).data[0] as i64;
-                        let y_grad_current = dy_grads.get_pixel(current.x as u32, current.y as u32).data[0] as i64;
-                        let x_grad_start = x_grad_start as i64;
-                        let y_grad_start = y_grad_start as i64;
+                        let x_gradient_current = dx_gradients.get_pixel(current.x as u32, current.y as u32).data[0] as i64;
+                        let y_gradient_current = dy_gradients.get_pixel(current.x as u32, current.y as u32).data[0] as i64;
+                        let x_gradient_start = x_gradient_start as i64;
+                        let y_gradient_start = y_gradient_start as i64;
 
-                        let tn = y_grad_start * x_grad_current - x_grad_start * y_grad_current;
-                        let td = x_grad_start * x_grad_current + y_grad_start * y_grad_current;
+                        let tn = y_gradient_start * x_gradient_current - x_gradient_start * y_gradient_current;
+                        let td = x_gradient_start * x_gradient_current + y_gradient_start * y_gradient_current;
                         println!("swt::swt tn/td: {}", (tn as f32) / (td as f32));
+
+                        println!(" collision angle: {}", f32::atan(y_gradient_current as f32 / x_gradient_current as f32));
+                        println!(" sum of angles: {}", f32::atan(y_gradient_current as f32 / x_gradient_current as f32) + f32::atan(y_gradient_start as f32 / x_gradient_start as f32)) ;
 
                         // Compute a reasonable apprxomation of `|| tn/td || < pi/6`.
                         if !(tn * 7 < - td * 4 && tn * 7 > td * 4) {
@@ -366,10 +371,13 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                         let stroke = Stroke {
                             segment: Segment {
                                 start: start.clone(),
-                                stop: current.clone(), // FIXME: If we really wanted to, we could avoid the clone here.
+                                stop: end.clone(), // FIXME: If we really wanted to, we could avoid the clone here.
                             },
                             width: width
                         };
+
+                        println!("swt::swt: stroke ({},{}) => ({},{}) width {}", stroke.segment.start.x, stroke.segment.start.y, stroke.segment.stop.x, stroke.segment.stop.y, stroke.width);
+
                         for current in stroke.iter() {
                             let pixel = stroke_widths.get_pixel_mut(current.x as u32, current.y as u32);
                             if pixel.data[0] == 0 || width <= pixel.data[0] {
@@ -377,15 +385,17 @@ pub fn swt(image: &GrayImage, params: &SwtParams, direction: SwtDirection) -> Gr
                                 pixel.data[0] = width;
                             }
                         }
-//                        println!("swt::swt: stroke ({},{}) => ({},{}) {}", stroke.segment.start.x, stroke.y0, stroke.x1, stroke.y1, stroke.width);
 
                         // Finally, record the stroke.
 
                         strokes.push(stroke);
+                        break 'walk_ray
 
-                        break 'find_gradient
                     }
                 }
+
+                // Regardless, we have found an opposite border, so no need to look any further.
+                break 'walk_ray
             }
         }
     }
@@ -722,7 +732,9 @@ pub fn detect_words(image: &DynamicImage, params: &SwtParams) {
     // FIXME: Implement downsizing.
 //    let mut words = vec![];
     let gray = image.to_luma();
-    let swt = Swt(swt(&gray, params, SwtDirection::BrightToDark));
-    colorize(&swt.0).save("/tmp/output-lighthouse-swt.png").unwrap();
-    let _ = get_connected_letters(&gray, &swt, params);
+    let swt_1 = Swt(swt(&gray, params, SwtDirection::BrightToDark));
+    colorize(&swt_1.0).save("/tmp/output-lighthouse-swt-bright-to-dark.png").unwrap();
+    let swt_2 = Swt(swt(&gray, params, SwtDirection::DarkToBright));
+    colorize(&swt_2.0).save("/tmp/output-lighthouse-swt-dark-to-bright.png").unwrap();
+    let _ = get_connected_letters(&gray, &swt_1, params);
 }

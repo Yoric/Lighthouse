@@ -26,7 +26,10 @@ impl Iterator for SegmentIterator {
         let result;
         if let Some(ref mut iter) = self.ray {
             result = iter.next().expect("A RayIterator should always return a point.");
+            debug_assert!(iter.sx as i32 * result.x <= iter.sx as i32 * self.stop.x);
+            debug_assert!(iter.sy as i32 * result.y <= iter.sy as i32 * self.stop.y);
             if result == self.stop {
+                // FIXME: This won't necessarily hit.
                 done = true;
             }
         } else {
@@ -44,13 +47,13 @@ pub struct RayIterator {
     pos: Point,
     adx: i32,
     ady: i32,
-    sx:  i8, // FIXME: sx is always -1 or 1, consider packing.
-    sy:  i8, // FIXME: sy is always -1 or 1, consider packing.
     err: i32,
+    sx:  i32, // FIXME: sx is always -1 or 1, consider packing.
+    sy:  i32, // FIXME: sy is always -1 or 1, consider packing.
 }
 
 impl RayIterator {
-    pub fn new(point: Point, dx: i32, dy: i32) -> Self {
+    pub fn new(start: Point, dx: i32, dy: i32) -> Self {
         assert!(dx != 0 || dy != 0);
         let sx = if dx > 0 { 1 } else { -1 };
         let sy = if dy > 0 { 1 } else { -1 };
@@ -58,7 +61,7 @@ impl RayIterator {
         let ady = i32::abs(dy);
         let err = adx - ady;
         RayIterator {
-            pos: point,
+            pos: start,
             adx: adx,
             ady: ady,
             sx: sx,
@@ -71,6 +74,8 @@ impl RayIterator {
 impl Iterator for RayIterator {
     type Item = Point;
     fn next(&mut self) -> Option<Self::Item> {
+        let result = self.pos.clone();
+
         let e2 = 2 * self.err;
         if e2 > -self.ady {
             self.err -= self.ady;
@@ -80,6 +85,6 @@ impl Iterator for RayIterator {
             self.err += self.adx;
             self.pos.y += self.sy as i32;
         }
-        Some(self.pos.clone())
+        Some(result)
     }
 }
